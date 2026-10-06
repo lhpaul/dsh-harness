@@ -6,9 +6,9 @@
  * upstream client plugins, so the repo keeps no build step. Its `require`
  * reaches only the client baseline (React, ui-primitives).
  *
- * - Roots: the cwd, then the absolute directory candidates of
- *   `remote.fileReferences.list(sessionId, '')` (MultiRootFileReferenceService
- *   offers the extra roots there).
+ * - Roots: the cwd, then the extra roots and the session's workspace file
+ *   from `remote.workspaceFiles.list(sessionId, ROOTS_LISTING)`, a reserved
+ *   path the `/workspace-files` plugin answers without loading the session.
  * - Listings: `remote.workspaceFiles.list(sessionId, absolutePath)`; the
  *   `/workspace-files` plugin lets it list inside the extra roots.
  * - Files open through `tab.actions.openResource` with the same
@@ -16,6 +16,10 @@
  *
  * Expansion is component state and resets when the tab body remounts; the
  * reload button re-lists every open directory. No watches.
+ *
+ * It also adds the session's workspace file and extra roots to the Sidebar
+ * Session-row hover card (`sidebar.session.row.hover`, mounted only while the
+ * card is open).
  */
 window.__ModuleLoader__.load({
   id: 'dsh-lh-workspace-roots',
@@ -29,12 +33,15 @@ window.__ModuleLoader__.load({
     const ID = 'dsh-lh-workspace-roots'
     const KIND = 'workspace-roots'
     const NS = 'lhWorkspaceRoots'
+    // Mirrors ROOTS_LISTING in workspace-files.js.
+    const ROOTS_LISTING = '/.dsh-lh-workspace-roots'
 
     const en = {
       'type.label': 'Roots',
       'guide.title': 'Workspace roots',
       'guide.description': 'Browse the session folder and its extra writable roots',
       'root.primary': 'session folder',
+      'file.union': 'All workspace files of the folder',
       loading: 'Reading…',
       empty: 'Empty directory',
       truncated: 'Too many entries, showing only some of them.',
@@ -50,6 +57,7 @@ window.__ModuleLoader__.load({
       'guide.title': '工作区根目录',
       'guide.description': '浏览会话目录及其额外的可写根目录',
       'root.primary': '会话目录',
+      'file.union': '该目录的全部工作区文件',
       loading: '正在读取…',
       empty: '空目录',
       truncated: '条目太多，只显示了一部分。',
@@ -64,6 +72,13 @@ window.__ModuleLoader__.load({
     const CSS = `
 .lhroots-root { display: flex; flex-direction: column; height: 100%; min-height: 0; color: var(--dsw-alias-label-primary); font-size: var(--dsh-content-font-size-secondary, 13px); line-height: 1.5; }
 .lhroots-header { display: flex; flex: 0 0 auto; gap: 4px; align-items: center; justify-content: flex-end; box-sizing: border-box; height: 38px; padding: 0 6px 0 16px; border-bottom: 0.5px solid var(--dsw-alias-border-l3); }
+.lhroots-file { display: flex; flex: 1 1 auto; gap: 6px; align-items: center; min-width: 0; color: var(--dsw-alias-label-secondary); font-size: 12px; }
+.lhroots-file > span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.lhroots-hover { display: flex; flex-direction: column; gap: 2px; font-size: 12px; line-height: 16px; color: #ADB2B8; }
+.lhroots-hover-line { display: flex; gap: 6px; align-items: flex-start; }
+.lhroots-hover-line > svg { flex: 0 0 auto; margin-top: 2px; }
+.lhroots-hover-line > bdi, .lhroots-hover-line > span { min-width: 0; overflow-wrap: anywhere; }
+.lhroots-hover-file { color: #CFD3D6; }
 .lhroots-body { flex: 1 1 auto; min-height: 0; margin-right: 2px; padding: 8px 0 8px 8px; overflow: auto; scrollbar-gutter: stable; }
 .lhroots-level { margin: 0; padding: 0; list-style: none; }
 .lhroots-level .lhroots-level { padding-left: 18px; }
@@ -101,6 +116,20 @@ window.__ModuleLoader__.load({
     function basename(path) {
       const trimmed = trimSlash(path)
       return trimmed.slice(trimmed.lastIndexOf('/') + 1) || trimmed
+    }
+
+    function tildify(path) {
+      return path.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, '~')
+    }
+
+    /** The session's roots summary from the reserved listing; empty when unavailable. */
+    function summaryOf(result) {
+      if (!result.ok) return { file: null, roots: [] }
+      const entries = result.value.entries
+      return {
+        file: entries.find((entry) => entry.type === 'file')?.name ?? null,
+        roots: entries.filter((entry) => entry.type === 'directory').map((entry) => trimSlash(entry.name)),
+      }
     }
 
     function encodeSegment(segment) {
@@ -173,17 +202,25 @@ window.__ModuleLoader__.load({
       return h('li', { 'data-roots-entry': 'other' }, h('span', { className: 'lhroots-row lhroots-other', 'aria-disabled': 'true' }, name))
     }
 
-    function RootsBody({ useTabInfo, sessionId, useSessions, t, listRoots, listDir }) {
+    function FileLabel({ file, t }) {
+      const name = file === null ? t('file.union') : basename(file)
+      return h(Fragment, null,
+        h(FileTypeIcon, { kind: classifyFileType(file ?? 'workspace.code-workspace'), size: 14 }),
+        h('span', { title: file ?? undefined }, name))
+    }
+
+    function RootsBody({ useTabInfo, sessionId, useSessions, t, rootsOf, listDir }) {
       const { tab } = useTabInfo()
       const cwd = useSessions((sessions) => sessions.byId[sessionId]?.cwd)
       const [generation, setGeneration] = useState(0)
-      const [extras, setExtras] = useState([])
-      // listRoots is left out: only a reload, a new cwd or another session re-lists the roots.
+      const [summary, setSummary] = useState({ file: null, roots: [] })
+      // rootsOf is left out: only a reload, a new cwd or another session re-reads the roots.
       useEffect(() => {
         const controller = new AbortController()
-        listRoots(controller.signal).then((roots) => { if (!controller.signal.aborted) setExtras(roots) })
+        rootsOf(controller.signal).then((next) => { if (!controller.signal.aborted) setSummary(next) })
         return () => { controller.abort() }
       }, [sessionId, generation, cwd])
+      const extras = summary.roots
       if (cwd === undefined) return h('div', { className: 'lhroots-root' }, h('p', { className: 'lhroots-note' }, t('noWorkspace')))
       const tree = {
         t,
@@ -195,6 +232,8 @@ window.__ModuleLoader__.load({
       const roots = [primary, ...extras.filter((root) => root !== primary)]
       return h('div', { className: 'lhroots-root', 'data-roots-state': 'tree' },
         h('div', { className: 'lhroots-header' },
+          h('div', { className: 'lhroots-file', 'data-roots-file': summary.file ?? '' },
+            (summary.file !== null || extras.length > 0) && h(FileLabel, { file: summary.file, t })),
           h('button', { type: 'button', className: 'lhroots-tool', 'aria-label': t('reload'), title: t('reload'), onClick: () => { setGeneration(generation + 1) } },
             h(IconRefreshOutlineRegular))),
         h('div', { className: 'lhroots-body' },
@@ -209,12 +248,28 @@ window.__ModuleLoader__.load({
           })))))
     }
 
+    /** Session-row hover-card section: the session's workspace file and extra roots. */
+    function SessionRootsHover({ sessionId, t, rootsOf }) {
+      const [summary, setSummary] = useState(undefined)
+      useEffect(() => {
+        const controller = new AbortController()
+        rootsOf(sessionId, controller.signal).then((next) => { if (!controller.signal.aborted) setSummary(next) })
+        return () => { controller.abort() }
+      }, [sessionId])
+      if (summary === undefined || (summary.file === null && summary.roots.length === 0)) return null
+      return h('div', { className: 'lhroots-hover', 'data-roots-hover': '' },
+        h('div', { className: 'lhroots-hover-line lhroots-hover-file' }, h(FileLabel, { file: summary.file, t })),
+        summary.roots.map((root) => h('div', { className: 'lhroots-hover-line', key: root },
+          h(IconFolderCloseRegular, { size: 12 }),
+          h('bdi', null, tildify(root)))))
+    }
+
     function RootsTitle({ useTabInfo }) {
       const { tab } = useTabInfo()
       return h(Fragment, null, h(FileTypeIcon, { kind: 'folder', size: 16 }), tab.title)
     }
 
-    const inject = ['slots', 'locale', 'sidebarRightTabs', 'remote', 'remote.workspaceFiles', 'remote.fileReferences']
+    const inject = ['slots', 'locale', 'sidebarRightTabs', 'remote', 'remote.workspaceFiles']
 
     function apply(ctx) {
       const t = ctx.locale.bind(NS)
@@ -239,10 +294,9 @@ window.__ModuleLoader__.load({
           icon: GuideArtworkFiles,
         }],
       }), 'lh-workspace-roots: tab type')
+      const rootsOf = (sessionId, signal) => ctx.remote.workspaceFiles.list(sessionId, ROOTS_LISTING, signal).then(summaryOf)
       const face = (sessionId) => ({
-        listRoots: (signal) => ctx.remote.fileReferences.list(sessionId, '', signal).then((result) => (result.ok
-          ? result.value.filter((candidate) => candidate.kind === 'directory' && candidate.path.startsWith('/')).map((candidate) => trimSlash(candidate.path))
-          : [])),
+        rootsOf: (signal) => rootsOf(sessionId, signal),
         listDir: (path, signal) => ctx.remote.workspaceFiles.list(sessionId, path, signal),
       })
       ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register(
@@ -253,6 +307,13 @@ window.__ModuleLoader__.load({
         { name: 'sidebar.right.pane.tab.title', key: ID },
         RootsTitle,
       )), 'lh-workspace-roots: tab title')
+      ctx.effect(() => ctx.slots.inject('sidebar.session.row.hover', () => ctx.slots.register({
+        name: 'sidebar.session.row.hover',
+        id: 'lh-workspace-roots',
+        order: 20,
+        locale: NS,
+        inject: () => ({ rootsOf }),
+      }, SessionRootsHover)), 'lh-workspace-roots: session hover')
     }
 
     return { apply, inject }

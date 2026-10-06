@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { after, before, describe, test } from 'node:test'
 import { Context, symbols } from '@deepseek-ai/cordis'
 import WorkspaceRootsPolicyService from '../packages/workspace-roots/src/index.js'
-import { anchorScope, apply } from '../packages/workspace-roots/src/workspace-files.js'
+import { ROOTS_LISTING, anchorScope, apply, rootsListing } from '../packages/workspace-roots/src/workspace-files.js'
 import { buildFixture, memoryStorageDomain, tempHomeDir } from './helpers.mjs'
 
 describe('workspace-files extra-root anchoring', () => {
@@ -103,6 +103,44 @@ describe('workspace-files extra-root anchoring', () => {
     target.list(scope('stored', p.leasityRepo), p.assetsBlum)
     assert.deepEqual(calls.map((call) => call[2]), [p.assetsLeasity, p.leasityRepo])
     dispose()
+  })
+
+  test('the reserved listing answers with the workspace file and roots without calling upstream', async () => {
+    const { target, calls, dispose } = install()
+    const stored = await target.list(scope('stored-union', p.leasityRepo), ROOTS_LISTING)
+    assert.equal(stored.path, ROOTS_LISTING)
+    assert.equal(stored.truncated, false)
+    assert.deepEqual(new Set(stored.entries.map((entry) => `${entry.type}:${entry.name}`)),
+      new Set([`directory:${p.vault}`, `directory:${p.assetsLeasity}`]))
+    const outside = await target.list(scope('stored-outside', p.outside), ROOTS_LISTING)
+    assert.deepEqual(outside.entries, [])
+    assert.deepEqual(calls, [])
+    dispose()
+  })
+
+  test('the reserved listing pins a loaded session but only reads an unloaded one', async () => {
+    const { target, dispose } = install()
+    const file = join(p.blum, 'Blum - BAUM.code-workspace')
+    await policy.selection.setActiveFile(p.blum, file)
+    try {
+      live.set('hovered', { id: 'hovered', header: { id: 'hovered', cwd: p.blum } })
+      const loaded = await target.list(scope('hovered', p.blum), ROOTS_LISTING)
+      assert.deepEqual(loaded.entries[0], { name: file, type: 'file' })
+      assert.ok(loaded.entries.some((entry) => entry.name === p.shared))
+      assert.ok(!loaded.entries.some((entry) => entry.name === p.assetsBlum))
+      assert.equal(policy.selection.pinOf('hovered'), file)
+
+      const unloaded = await target.list(scope('stored-blum', p.blum), ROOTS_LISTING)
+      assert.deepEqual(unloaded.entries[0], { name: file, type: 'file' })
+      assert.equal(policy.selection.pinOf('stored-blum'), undefined)
+    } finally {
+      await policy.selection.setActiveFile(p.blum, null)
+    }
+    dispose()
+  })
+
+  test('rootsListing omits the file entry for the union of a scope\'s files', () => {
+    assert.deepEqual(rootsListing(null, ['/a']).entries, [{ name: '/a', type: 'directory' }])
   })
 
   test('disposal restores the upstream methods; a second install is refused', () => {

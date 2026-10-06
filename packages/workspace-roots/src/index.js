@@ -237,10 +237,22 @@ export class WorkspaceRootsPolicyService extends Service {
    * @returns {string[]} canonical extra roots.
    */
   storedSessionRoots(sessionId, cwd) {
+    if (this.roots.scopeOf(cwd) === undefined) return []
+    return this.roots.extraRoots(cwd, this.storedSessionFile(sessionId, cwd))
+  }
+
+  /**
+   * The workspace file of a session that may not be loaded, without pinning:
+   * its pin, or the scope's active file when it has none yet.
+   * @param {string} sessionId - session id.
+   * @param {string} cwd - the session cwd.
+   * @returns {string | null} absolute workspace file path, or null for the union (or no scope).
+   */
+  storedSessionFile(sessionId, cwd) {
     const scope = this.roots.scopeOf(cwd)
-    if (scope === undefined) return []
-    const pinned = this.selection?.pinOf(sessionId)
-    return this.roots.extraRoots(cwd, pinned !== undefined ? pinned : this.selection?.activeFile(scope) ?? null)
+    if (scope === undefined || this.selection === undefined) return null
+    const pinned = this.selection.pinOf(sessionId)
+    return pinned !== undefined ? pinned : this.selection.activeFile(scope)
   }
 
   /**

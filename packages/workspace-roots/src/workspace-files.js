@@ -20,6 +20,8 @@
  * session resolves its workspace-file roots plus its grants; a session that is
  * not loaded only its workspace-file roots (`storedSessionRoots`). Denied write paths are listed like
  * any other directory: the trees are the user's view and never reach a model.
+ * `list` also answers the reserved {@link ROOTS_LISTING} path, which the Roots
+ * tab and the session hover card read.
  *
  * @module dsh-lh-workspace-roots/workspace-files
  */
@@ -34,6 +36,33 @@ export const inject = ['workspaceFiles', 'sandboxPolicy', 'sessions']
 
 /** Upstream `WorkspaceFiles` methods whose directory confinement is re-anchored. */
 const ANCHORED_METHODS = ['list', 'changes']
+
+/**
+ * Reserved `list` path answered with the session's workspace file and extra
+ * roots instead of a directory listing (see {@link rootsListing}). The browser
+ * half reads it through the existing `workspaceFiles` Remote, whose session
+ * lookup only reads the session header, so it never loads a session.
+ */
+export const ROOTS_LISTING = '/.dsh-lh-workspace-roots'
+
+/**
+ * The reserved listing: one `file` entry naming the session's workspace file
+ * (absent for the union of the scope's files), then one `directory` entry per
+ * extra root; entry names are absolute paths.
+ * @param {string | null} file - the session's workspace file.
+ * @param {string[]} roots - the session's extra roots.
+ * @returns {{ path: string, entries: { name: string, type: 'file' | 'directory' }[], truncated: false }} a `WorkspaceDirectoryListing`.
+ */
+export function rootsListing(file, roots) {
+  return {
+    path: ROOTS_LISTING,
+    entries: [
+      ...file === null ? [] : [{ name: file, type: 'file' }],
+      ...roots.map((root) => ({ name: root, type: 'directory' })),
+    ],
+    truncated: false,
+  }
+}
 
 /**
  * The scope upstream should confine `path` to: the session cwd, or the
@@ -68,6 +97,11 @@ export function apply(ctx) {
     if (session !== undefined) return ctx.sandboxPolicy.resolve({ session, mode: 'read-only' }).workspaceRoots ?? []
     return ctx.sandboxPolicy.storedSessionRoots(scope.sessionId, scope.workspaceRoot)
   }
+  const workspaceFile = (scope) => {
+    const session = ctx.sessions.get(scope.sessionId)
+    if (session !== undefined) return ctx.sandboxPolicy.sessionFile(session.header, scope.workspaceRoot)
+    return ctx.sandboxPolicy.storedSessionFile(scope.sessionId, scope.workspaceRoot)
+  }
   ctx.effect(() => {
     for (const method of ANCHORED_METHODS) {
       const upstream = target[method]
@@ -75,6 +109,9 @@ export function apply(ctx) {
         configurable: true,
         writable: true,
         value(scope, path, signal) {
+          if (method === 'list' && path === ROOTS_LISTING) {
+            return Promise.resolve(rootsListing(workspaceFile(scope), extraRoots(scope)))
+          }
           return upstream.call(this, anchorScope(scope, path, () => extraRoots(scope)), path, signal)
         },
       })

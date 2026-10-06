@@ -71,6 +71,7 @@ export function apply(ctx, config) {
       anchored: Object.hasOwn(original, 'list') && Object.hasOwn(original, 'changes'),
       extraRoot: await listVia(config.files.extraRoot),
       outside: await listVia(config.files.outside),
+      rootsListing: await listVia('/.dsh-lh-workspace-roots'),
       clientBundles: ['dsh-lh-workspace-roots', '@deepseek-ai/dsh-api-workspace-files'].filter((id) => ctx.clientModules.table.has(id)),
     }
     const capability = ctx.directoryPicker.capability()
@@ -150,10 +151,11 @@ try {
     && files.anchored === true
     && Array.isArray(files.extraRoot) && files.extraRoot.includes('smoke-blum-assets.bash')
     && files.outside === 'error:workspace-file/outside-workspace'
+    && Array.isArray(files.rootsListing) && files.rootsListing.includes(p.assetsBlum) && files.rootsListing.includes(p.vault)
     && files.clientBundles.length === 2
     && loaderErrors.length === 0
   if (!filesOk) failures += 1
-  console.log(`${filesOk ? 'PASS' : 'FAIL'}  web file tree    provider=${files.provider} anchored=${files.anchored} extra-root=${JSON.stringify(files.extraRoot)} outside=${files.outside} client-bundles=${JSON.stringify(files.clientBundles)}${loaderErrors.length ? ` errors=${JSON.stringify(loaderErrors)}` : ''}`)
+  console.log(`${filesOk ? 'PASS' : 'FAIL'}  web file tree    provider=${files.provider} anchored=${files.anchored} extra-root=${JSON.stringify(files.extraRoot)} outside=${files.outside} roots-listing=${JSON.stringify(files.rootsListing)} client-bundles=${JSON.stringify(files.clientBundles)}${loaderErrors.length ? ` errors=${JSON.stringify(loaderErrors)}` : ''}`)
   const sel = result.selection
   const selectionOk = sel.pickerKind === 'native'
     && sel.pickerOverridden === true
