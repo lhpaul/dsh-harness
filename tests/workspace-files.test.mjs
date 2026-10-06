@@ -11,7 +11,7 @@ import { after, before, describe, test } from 'node:test'
 import { Context, symbols } from '@deepseek-ai/cordis'
 import WorkspaceRootsPolicyService from '../packages/workspace-roots/src/index.js'
 import { anchorScope, apply } from '../packages/workspace-roots/src/workspace-files.js'
-import { buildFixture, tempHomeDir } from './helpers.mjs'
+import { buildFixture, memoryStorageDomain, tempHomeDir } from './helpers.mjs'
 
 describe('workspace-files extra-root anchoring', () => {
   let cleanup, p, policy
@@ -43,6 +43,7 @@ describe('workspace-files extra-root anchoring', () => {
     ;[base, cleanup] = tempHomeDir()
     p = buildFixture(base)
     const ctx = new Context()
+    ctx.provide('storageDomain', memoryStorageDomain())
     ctx.provide('sessionProjections', {
       register: () => () => {},
       stateOf: (session, key) => (key === 'workspaceRootGrants' ? grants.get(session.id) ?? null : null),

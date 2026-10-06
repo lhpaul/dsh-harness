@@ -9,7 +9,9 @@
  * policy fields, `resolve()` adds:
  *
  *   - `workspaceRoots`: extra roots derived on every call from the
- *     `*.code-workspace` files of the session's scope (see `roots.js`), plus
+ *     `*.code-workspace` files of the session's scope (see `roots.js`) — only
+ *     the file the session pinned when the scope had an active file (see
+ *     `workspace-selection.js`) — plus
  *     the roots the user granted in this session through the
  *     `add_workspace_root` tool (folded from the log; see `root-grants.js`);
  *   - `deniedWritePaths`: the configured paths, canonicalized, which the patched
@@ -29,7 +31,8 @@ import { Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { z as zod } from 'zod'
 import { writableRoots } from '@deepseek-ai/dsh-sandbox'
-import { WorkspaceRootsResolver, canonical, expandHome, isWithin } from './roots.js'
+import { WORKSPACE_SUFFIX, WorkspaceRootsResolver, canonical, expandHome, isWithin } from './roots.js'
+import { WorkspaceSelection, selectionDomain } from './workspace-selection.js'
 import {
   GRANTS_PROJECTION,
   addWorkspaceRootTool,
@@ -121,7 +124,7 @@ export class WorkspaceRootsPolicyService extends Service {
     deniedWritePaths: z.array(z.string()).default([]),
   })
 
-  static inject = ['sessionProjections']
+  static inject = ['sessionProjections', 'storageDomain']
 
   /** Load-time runtime check; tests substitute it in a subclass. */
   static assertPatched = assertPatchedRuntime
@@ -144,7 +147,10 @@ export class WorkspaceRootsPolicyService extends Service {
     /** The absolute `workspace-write` fallback root for calls without a session cwd. */
     this.workspaceRoot = resolveWorkspaceRoot(config.workspaceRoot ?? process.cwd())
     this.deniedWritePaths = config.deniedWritePaths
+    this.logger = logger
     this.roots = new WorkspaceRootsResolver({ scopesRoot: config.scopesRoot, onWarning: (message) => logger.warn(message) })
+    /** @type {WorkspaceSelection | undefined} set by init, before the service is exposed. */
+    this.selection = undefined
 
     ctx.sessionProjections.register({
       key: 'sandboxMode',
@@ -178,10 +184,18 @@ export class WorkspaceRootsPolicyService extends Service {
     })
   }
 
+  /** Open the workspace-selection domain before the service is exposed. */
+  async [Service.init]() {
+    const domain = await this.ctx.storageDomain.open(selectionDomain)
+    this.ctx.effect(() => () => domain.close(), 'dsh-lh-workspace-roots: selection domain')
+    this.selection = new WorkspaceSelection(domain, (message) => this.logger.warn(message))
+  }
+
   /**
    * Resolve the complete policy for one capability call. Mode precedence and
-   * the primary root match upstream; extra roots are re-derived from the
-   * scope's workspace files on every call.
+   * the primary root match upstream; extra roots are re-derived on every call
+   * from the scope's workspace files, or only from the file the session
+   * pinned (see `workspace-selection.js`).
    * @param {{ session?: import('@deepseek-ai/dsh-session').Session, mode?: 'read-only' | 'workspace-write' | 'danger-full-access' }} [request]
    * @returns the per-call policy with optional `workspaceRoots` and `deniedWritePaths`.
    */
@@ -189,7 +203,8 @@ export class WorkspaceRootsPolicyService extends Service {
     const { session } = request
     const workspaceRoot = resolveWorkspaceRoot(session?.header.cwd ?? this.workspaceRoot)
     const granted = session === undefined ? [] : this.grantedRoots(session)
-    const workspaceRoots = [...new Set([...this.roots.extraRoots(workspaceRoot), ...granted])].sort()
+    const fileRoots = this.roots.extraRoots(workspaceRoot, session === undefined ? null : this.sessionFile(session.header, workspaceRoot))
+    const workspaceRoots = [...new Set([...fileRoots, ...granted])].sort()
     const deniedWritePaths = this.deniedWritePaths.map(canonical)
     return {
       mode: request.mode ?? (session === undefined ? undefined : this.overrideOf(session)) ?? this.defaultMode,
@@ -198,6 +213,58 @@ export class WorkspaceRootsPolicyService extends Service {
       ...deniedWritePaths.length === 0 ? {} : { deniedWritePaths },
       ...session === undefined ? {} : { sessionId: session.id },
     }
+  }
+
+  /**
+   * The workspace file a session uses (pinned on first use), or null for the
+   * union of its scope's files.
+   * @param {{ id: string, parentSession?: string }} header - session header.
+   * @param {string} cwd - the session cwd.
+   * @returns {string | null} absolute workspace file path.
+   */
+  sessionFile(header, cwd) {
+    const scope = this.roots.scopeOf(cwd)
+    if (scope === undefined || this.selection === undefined) return null
+    return this.selection.fileFor(header, scope)
+  }
+
+  /**
+   * Workspace-file roots of a session that is not loaded, for host views
+   * such as the Web file tree. Uses the session's pin, or the scope's active
+   * file when it has none yet.
+   * @param {string} sessionId - session id.
+   * @param {string} cwd - the session cwd.
+   * @returns {string[]} canonical extra roots.
+   */
+  storedSessionRoots(sessionId, cwd) {
+    const scope = this.roots.scopeOf(cwd)
+    if (scope === undefined) return []
+    const pinned = this.selection?.pinOf(sessionId)
+    return this.roots.extraRoots(cwd, pinned !== undefined ? pinned : this.selection?.activeFile(scope) ?? null)
+  }
+
+  /**
+   * Record what the user opened from the Add workspace dialog and return the
+   * directory DSH should register as the workspace: a `*.code-workspace` file
+   * directly in a scope becomes that scope's active file (its directory is
+   * returned); a scope directory clears its active file; any other directory
+   * is returned unchanged.
+   * @param {string} picked - absolute path the user chose.
+   * @returns {Promise<string>} the workspace directory.
+   * @throws when a workspace file does not lie directly in a scope directory.
+   */
+  async openPicked(picked) {
+    const path = canonical(picked)
+    if (path.endsWith(WORKSPACE_SUFFIX) && !isDirectory(path)) {
+      const scope = this.roots.scopeOf(path)
+      if (scope === undefined || !this.roots.isWorkspaceFileOf(path, scope)) {
+        throw new Error(`${JSON.stringify(path)} is not a workspace file directly inside a folder of ${this.roots.scopesRoot}`)
+      }
+      await this.selection.setActiveFile(scope, path)
+      return scope
+    }
+    if (this.roots.scopeOf(path) === path) await this.selection.setActiveFile(path, null)
+    return path
   }
 
   /**

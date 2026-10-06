@@ -4,9 +4,10 @@
  *
  * Rule: the scope of a cwd is the first-level directory under `scopesRoot`
  * that contains it (`<scopesRoot>/<scope>/...`). Every `*.code-workspace`
- * file directly inside that scope directory is read; each folder entry that
- * resolves OUTSIDE the scope directory is an extra root (union across files,
- * canonical, deduplicated, sorted). A cwd outside `scopesRoot`, or equal to
+ * file directly inside that scope directory is read — or only one of them,
+ * when the caller names the session's selected file — and each folder entry
+ * that resolves OUTSIDE the scope directory is an extra root (union across
+ * files, canonical, deduplicated, sorted). A cwd outside `scopesRoot`, or equal to
  * it, has no scope and therefore no extra roots.
  *
  * Results are cached per scope and invalidated whenever the set of workspace
@@ -112,18 +113,50 @@ export class WorkspaceRootsResolver {
   /**
    * Extra writable roots for a session whose cwd is `cwd`.
    * @param {string} cwd - absolute session working directory.
+   * @param {string | null} [file] - one workspace file of the scope to read
+   *   instead of all of them; a file that is gone or lies elsewhere yields no roots.
    * @returns {string[]} canonical, sorted, existing directories outside the scope.
    */
-  extraRoots(cwd) {
+  extraRoots(cwd, file = null) {
     const scope = this.scopeOf(cwd)
     if (scope === undefined) return []
-    const signature = this.signatureOf(scope)
-    let entry = this.cache.get(scope)
+    if (file !== null && !this.isWorkspaceFileOf(file, scope)) {
+      this.warnOnce(`${scope}\0${file}`, `workspace-roots: workspace file ${JSON.stringify(file)} is not in ${scope}; no extra roots`)
+      return []
+    }
+    const files = file === null ? this.workspaceFiles(scope) : [file]
+    const key = `${scope}\0${file ?? ''}`
+    const signature = this.signatureOf(files)
+    let entry = this.cache.get(key)
     if (entry === undefined || entry.signature !== signature) {
-      entry = { signature, candidates: this.compute(scope) }
-      this.cache.set(scope, entry)
+      entry = { signature, candidates: this.compute(scope, files) }
+      this.cache.set(key, entry)
     }
     return entry.candidates.filter(isDirectory)
+  }
+
+  /**
+   * Whether `file` is an existing workspace file directly inside `scope`.
+   * @param {string} file - absolute path.
+   * @param {string} scope - canonical scope directory.
+   * @returns {boolean} true for `<scope>/<name>.code-workspace` that exists.
+   */
+  isWorkspaceFileOf(file, scope) {
+    if (!isAbsolute(file) || !file.endsWith(WORKSPACE_SUFFIX)) return false
+    const real = canonical(file)
+    try {
+      return dirname(real) === scope && statSync(real).isFile()
+    } catch {
+      // statSync failed: the workspace file is gone.
+      return false
+    }
+  }
+
+  warnOnce(key, message) {
+    this.warned ??= new Set()
+    if (this.warned.has(key)) return
+    this.warned.add(key)
+    this.onWarning(message)
   }
 
   /** Workspace files of `scope`, sorted by name. */
@@ -139,8 +172,8 @@ export class WorkspaceRootsResolver {
     }
   }
 
-  signatureOf(scope) {
-    return this.workspaceFiles(scope).map((file) => {
+  signatureOf(files) {
+    return files.map((file) => {
       try {
         const st = statSync(file)
         return `${file}:${st.ino}:${st.mtimeMs}:${st.size}`
@@ -151,9 +184,9 @@ export class WorkspaceRootsResolver {
     }).join('\n')
   }
 
-  compute(scope) {
+  compute(scope, files) {
     const found = new Set()
-    for (const file of this.workspaceFiles(scope)) {
+    for (const file of files) {
       for (const folder of this.foldersOf(file)) {
         const root = canonical(folder)
         if (isWithin(root, scope)) continue

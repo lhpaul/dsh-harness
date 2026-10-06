@@ -1,0 +1,91 @@
+/**
+ * Add workspace accepts a folder or a VS Code `*.code-workspace` file.
+ *
+ * The upstream `directory-picker` row (directory-picker-auto) mounts the
+ * native or the browse interaction. Under the native interaction on macOS,
+ * this plugin replaces the `pick` of the live capability object with one
+ * `NSOpenPanel` that can choose either kind. The result goes through
+ * `ctx.sandboxPolicy.openPicked()`: a workspace file becomes its scope's
+ * active file and its directory is returned, so DSH still registers a
+ * directory as the workspace. The browse interaction and other platforms keep
+ * the upstream chooser.
+ *
+ * The capability object is stable for the service lifetime (the seam's
+ * contract), so the override lives as long as this plugin and that object;
+ * Cordis restarts this plugin when `ctx.directoryPicker` is replaced, and
+ * disposal restores the upstream `pick`.
+ *
+ * @module dsh-lh-workspace-roots/directory-picker
+ */
+
+import { execFile } from 'node:child_process'
+
+export const name = 'dsh-lh-workspace-roots/directory-picker'
+
+export const inject = ['directoryPicker', 'sandboxPolicy']
+
+/** JXA run by `osascript -l JavaScript`; prints the chosen path, or nothing on cancel. */
+const OPEN_PANEL_SCRIPT = `
+ObjC.import('AppKit');
+const app = $.NSApplication.sharedApplication;
+app.setActivationPolicy($.NSApplicationActivationPolicyAccessory);
+app.activateIgnoringOtherApps(true);
+const panel = $.NSOpenPanel.openPanel;
+panel.canChooseFiles = true;
+panel.canChooseDirectories = true;
+panel.allowsMultipleSelection = false;
+panel.allowedFileTypes = $(['code-workspace']);
+panel.message = 'Select a workspace folder or a .code-workspace file';
+panel.prompt = 'Open';
+panel.runModal === $.NSModalResponseOK ? panel.URLs.objectAtIndex(0).path.js : '';
+`
+
+/**
+ * Open the macOS folder-or-workspace-file panel.
+ * @param {AbortSignal} signal - caller lifetime; abort kills the panel.
+ * @returns {Promise<string | null>} the chosen absolute path, or null on cancel.
+ */
+export function chooseFolderOrWorkspaceFile(signal) {
+  return new Promise((resolve, reject) => {
+    execFile('osascript', ['-l', 'JavaScript', '-e', OPEN_PANEL_SCRIPT], { signal }, (error, stdout) => {
+      if (error) {
+        reject(error)
+        return
+      }
+      const path = stdout.replace(/[\r\n]+$/, '')
+      resolve(path === '' ? null : path)
+    })
+  })
+}
+
+/**
+ * Build the replacement `pick`.
+ * @param {(signal: AbortSignal) => Promise<string | null>} choose - the chooser.
+ * @param {{ openPicked: (path: string) => Promise<string> }} policy - `ctx.sandboxPolicy`.
+ * @returns {(signal: AbortSignal) => Promise<string | null>} a native-capability `pick`.
+ */
+export function workspacePick(choose, policy) {
+  return async (signal) => {
+    const picked = await choose(signal)
+    return picked === null ? null : policy.openPicked(picked)
+  }
+}
+
+/**
+ * @param {import('@deepseek-ai/cordis').Context} ctx - plugin context.
+ */
+export function apply(ctx) {
+  const logger = ctx.logger('workspace-roots')
+  const capability = ctx.directoryPicker.capability()
+  if (process.platform !== 'darwin' || capability.kind !== 'native') {
+    logger.info(`Add workspace keeps the upstream ${capability.kind} chooser on ${process.platform}; workspace files open only through the macOS native chooser`)
+    return
+  }
+  const upstream = capability.pick
+  ctx.effect(() => {
+    capability.pick = workspacePick(chooseFolderOrWorkspaceFile, ctx.sandboxPolicy)
+    return () => {
+      capability.pick = upstream
+    }
+  }, 'dsh-lh-workspace-roots: folder-or-workspace-file chooser')
+}

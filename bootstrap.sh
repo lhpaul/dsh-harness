@@ -124,14 +124,14 @@ apply() {
   say "5/5 verify"
   local dump
   dump=$("$DSH" --profile "$PROFILE" --dump-config 2>&1)
-  for row in "$PKG_NAME" "$PKG_NAME/file-references" "$PKG_NAME/workspace-files"; do
+  for row in "$PKG_NAME" "$PKG_NAME/file-references" "$PKG_NAME/workspace-files" "$PKG_NAME/directory-picker"; do
     grep -qx "  name: $row" <<<"$dump" || die "composed config of profile $PROFILE does not load $row"
   done
   if grep -q "patch:" <<<"$dump"; then
     grep "patch:" <<<"$dump" >&2
     die "the composed config reports patch warnings"
   fi
-  echo "    composed config loads $PKG_NAME, $PKG_NAME/file-references and $PKG_NAME/workspace-files"
+  echo "    composed config loads $PKG_NAME and its file-references, workspace-files and directory-picker rows"
   if [ "$(uname -s)" = Darwin ]; then
     node patch/dsh-multi-root-verify.mjs
     node tests/smoke/boot-smoke.mjs || die "boot smoke failed"

@@ -16,6 +16,7 @@ Strategy, decisions and verified traps live in the vault note `~/Git/Cerebro/LH/
 | Root grants | `src/root-grants.js` (registered by the policy plugin) | The `add_workspace_root` tool and the `workspaceRootGrants` session projection. |
 | Directory listings | `dsh-lh-workspace-roots/workspace-files` (same package) | Lets upstream `ctx.workspaceFiles` list and watch directories inside the extra roots. |
 | Web Roots tab | `src/client.js` (the package's `./client` bundle) | Right-sidebar tab with one file tree per root. |
+| Workspace files | `dsh-lh-workspace-roots/directory-picker`, `src/workspace-selection.js` | Add workspace also opens a `*.code-workspace` file; each session keeps the file that was active when it started. |
 | Launcher | `bin/dsh`, `bin/dsh-node` | Runs the pinned runtime under a Node that satisfies `^22.19 \|\| >=24`. `~/.local/bin/dsh` symlinks here. |
 | Bootstrap | `bootstrap.sh` | install → patch → wire profile → launcher → verify. Idempotent; `--revert` undoes it. |
 
@@ -27,6 +28,18 @@ Strategy, decisions and verified traps live in the vault note `~/Git/Cerebro/LH/
 - A malformed file, or one without a `folders` array, logs a warning and contributes nothing; the session keeps running.
 - Roots that are `/`, `$HOME` or an ancestor of it, or that contain `~/Git`, are refused with a warning.
 - The policy context in the system prompt names the extra roots and the denied paths; without extra roots it is identical to upstream's text.
+
+### Opening a workspace file
+
+A scope often has several workspace files (`DevStack - DSH`, `DevStack - Helm`, …), and the union of all of them is broader than any one task. On macOS, the Web **Add workspace** button opens one panel that accepts a folder or a `*.code-workspace` file:
+
+- **A workspace file directly in a scope folder** becomes that scope's *active file*, and the scope folder is registered as the DSH workspace (DSH workspaces are directories, one per path).
+- **The scope folder itself** clears the active file: back to the union.
+- **Any other folder** is registered unchanged. A workspace file anywhere else is refused with an error.
+
+Each session pins its scope's active file (or the union) the first time its roots are resolved, and keeps it: switching the active file later affects only new sessions, so a running session never gains roots silently. Forks inherit the parent's pin; sessions that existed before this feature pin the union. A pinned file is re-read on every call; if it is deleted, the session gets no workspace-file roots and a warning is logged.
+
+Active files and pins live in the `dsh_lh_workspace_roots` storage domain (`ctx.storageDomain`), not in the session log; the resulting roots reach the model through the `sandbox:policy` context. The panel replaces `pick` on the live native capability of upstream `ctx.directoryPicker` (directory-picker-auto stays), and disposal restores it. The browse interaction (remote or SSH launches) and other platforms keep the upstream folder chooser. The Roots tab does not name the active file yet.
 
 ### Session grants (`add_workspace_root`)
 
@@ -92,7 +105,7 @@ The plugin refuses to start on an unpatched runtime with "the DSH runtime is not
 
 ### Profile wiring
 
-`dsh plugin --profile web add packages/workspace-roots` links the package into `~/.dsh/profiles/web` and adds it to `dsh.profile.bundles`. Its `cordis.patch.yml` disables the dsh-base `sandbox-policy` row and the dsh-web-app `file-reference-local` row, and inserts its own rows: the two replacements and `dsh-lh-workspace-roots/workspace-files`. A patch cannot rename a row: the Loader logs `name mismatch … skipping`.
+`dsh plugin --profile web add packages/workspace-roots` links the package into `~/.dsh/profiles/web` and adds it to `dsh.profile.bundles`. Its `cordis.patch.yml` disables the dsh-base `sandbox-policy` row and the dsh-web-app `file-reference-local` row, and inserts its own rows: the two replacements, `dsh-lh-workspace-roots/workspace-files` and `dsh-lh-workspace-roots/directory-picker`. A patch cannot rename a row: the Loader logs `name mismatch … skipping`.
 
 The home layer `~/.dsh/cordis.patch.yml` must not contain a `sandbox-policy` or `file-reference-local` row: it would re-enable or replace the upstream service after the bundle layer. Bootstrap refuses to run if it finds one, and its verify step fails on any `patch:` warning in the composed config.
 
@@ -123,7 +136,7 @@ Bootstrap never touches `~/.dsh/sessions`, `~/.dsh/storages` or credentials. Tes
 
 1. Stop `dsh web`.
 2. Bump `@deepseek-ai/dsh` in `package.json` to the exact new version and check out the matching tag in `~/Git/DevStack/deepseek-harness`.
-3. Bump the `0.2.0-rc.2` peer pins in `packages/workspace-roots/package.json`, then diff upstream `dsh-file-reference-local` against `src/file-references.js`: the `LocalFileReferenceService` constructor and `list()` signature, the `WorkspaceFileSearch` exports, and `scoreCandidate` in `search.ts`, which `file-references.js` mirrors. For root grants, re-check the `tool/call` and `tool/result` data fields (`name`, `callId`, `message.source.callId`, `meta`, `surfaceOp`), the approval outcome vocabulary, and the `ToolExecution.parent` semantics that `root-grants.js` relies on. For the Roots tab, re-check the `WorkspaceFiles` `list`/`changes` signatures and scope fields, the gateway's by-name method dispatch, the `sidebarRightTabs` and `sidebar.right.pane.tab` slot APIs, and the client-ui-primitives exports `client.js` requires.
+3. Bump the `0.2.0-rc.2` peer pins in `packages/workspace-roots/package.json`, then diff upstream `dsh-file-reference-local` against `src/file-references.js`: the `LocalFileReferenceService` constructor and `list()` signature, the `WorkspaceFileSearch` exports, and `scoreCandidate` in `search.ts`, which `file-references.js` mirrors. For root grants, re-check the `tool/call` and `tool/result` data fields (`name`, `callId`, `message.source.callId`, `meta`, `surfaceOp`), the approval outcome vocabulary, and the `ToolExecution.parent` semantics that `root-grants.js` relies on. For workspace files, re-check the `DirectoryPickerNativeCapability` (`pick`, stable capability object), directory-picker-auto's choice, and the `ctx.storageDomain` API. For the Roots tab, re-check the `WorkspaceFiles` `list`/`changes` signatures and scope fields, the gateway's by-name method dispatch, the `sidebarRightTabs` and `sidebar.right.pane.tab` slot APIs, and the client-ui-primitives exports `client.js` requires.
 4. Run `./bootstrap.sh`. It runs `npm ci` and applies the patch. If an anchor moved, the patch fails loudly and changes nothing.
 5. If the patch fails, read the new `writableRoots`, `seatbeltProfileArgs` and `checkedTarget` in the reference clone, update `HUNKS` in `patch/dsh-multi-root.mjs`, and re-run. Also diff upstream `dsh-sandbox-policy` (config, `sandboxMode` projection, policy context text) against `packages/workspace-roots/src/index.js`.
 6. Bootstrap's verify step must pass: composed config, patch verify, boot smoke, tests. If it does not, revert the pin and run `npm ci && ./bootstrap.sh`.

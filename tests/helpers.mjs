@@ -19,6 +19,32 @@ export function tempHomeDir(prefix = '.dsh-harness-test-') {
   return [dir, () => rmSync(dir, { recursive: true, force: true })]
 }
 
+/**
+ * In-memory stand-in for `ctx.storageDomain`: `open(spec)` returns tables with
+ * synchronous `get` and async `put`/`delete`, shared across opens of one name.
+ */
+export function memoryStorageDomain() {
+  const domains = new Map()
+  return {
+    domains,
+    async open(spec) {
+      if (!domains.has(spec.name)) domains.set(spec.name, new Map(Object.keys(spec.tables).map((name) => [name, new Map()])))
+      const tables = domains.get(spec.name)
+      return {
+        table: (name) => {
+          const records = tables.get(name)
+          return {
+            get: (key) => records.get(key),
+            put: async (key, value) => { records.set(key, value) },
+            delete: async (key) => { records.delete(key) },
+          }
+        },
+        close: async () => {},
+      }
+    },
+  }
+}
+
 export function writeJson(path, value) {
   mkdirSync(dirname(path), { recursive: true })
   writeFileSync(path, typeof value === 'string' ? value : JSON.stringify(value, null, '\t'))

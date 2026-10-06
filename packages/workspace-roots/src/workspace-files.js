@@ -18,7 +18,7 @@
  *
  * Extra roots come from `ctx.sandboxPolicy` (dsh-lh-workspace-roots): a loaded
  * session resolves its workspace-file roots plus its grants; a session that is
- * not loaded only its workspace-file roots. Denied write paths are listed like
+ * not loaded only its workspace-file roots (`storedSessionRoots`). Denied write paths are listed like
  * any other directory: the trees are the user's view and never reach a model.
  *
  * @module dsh-lh-workspace-roots/workspace-files
@@ -66,7 +66,7 @@ export function apply(ctx) {
   const extraRoots = (scope) => {
     const session = ctx.sessions.get(scope.sessionId)
     if (session !== undefined) return ctx.sandboxPolicy.resolve({ session, mode: 'read-only' }).workspaceRoots ?? []
-    return ctx.sandboxPolicy.roots?.extraRoots(scope.workspaceRoot) ?? []
+    return ctx.sandboxPolicy.storedSessionRoots(scope.sessionId, scope.workspaceRoot)
   }
   ctx.effect(() => {
     for (const method of ANCHORED_METHODS) {

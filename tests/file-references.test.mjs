@@ -12,7 +12,7 @@ import { after, before, describe, test } from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
 import WorkspaceRootsPolicyService from '../packages/workspace-roots/src/index.js'
 import MultiRootFileReferenceService from '../packages/workspace-roots/src/file-references.js'
-import { buildFixture, tempHomeDir } from './helpers.mjs'
+import { buildFixture, memoryStorageDomain, tempHomeDir } from './helpers.mjs'
 
 describe('MultiRootFileReferenceService', () => {
   let base, cleanup, p, ctx
@@ -31,6 +31,7 @@ describe('MultiRootFileReferenceService', () => {
     touch(join(p.assetsBlum, 'contrato-blum.pdf'))
     touch(join(p.assetsLeasity, 'contrato-leasity.pdf'))
     ctx = new Context()
+    ctx.provide('storageDomain', memoryStorageDomain())
     ctx.provide('sessionProjections', { register: () => () => {}, stateOf: () => null })
     ctx.provide('agents', { list: () => [], get: () => undefined })
     await ctx.plugin(WorkspaceRootsPolicyService, {

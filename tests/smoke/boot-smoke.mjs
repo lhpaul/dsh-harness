@@ -30,7 +30,7 @@ import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 export const name = 'lh-smoke-probe'
-export const inject = ['sandboxPolicy', 'sandbox', 'fs', 'fileReferences', 'agents', 'sessionProjections', 'tools', 'workspaceFiles', 'typertGateway', 'clientModules']
+export const inject = ['sandboxPolicy', 'sandbox', 'fs', 'fileReferences', 'agents', 'sessionProjections', 'tools', 'workspaceFiles', 'typertGateway', 'clientModules', 'directoryPicker']
 export function apply(ctx, config) {
   const cases = config.cases
   const run = async () => {
@@ -73,6 +73,19 @@ export function apply(ctx, config) {
       outside: await listVia(config.files.outside),
       clientBundles: ['dsh-lh-workspace-roots', '@deepseek-ai/dsh-api-workspace-files'].filter((id) => ctx.clientModules.table.has(id)),
     }
+    const capability = ctx.directoryPicker.capability()
+    const rootsOf = (session) => ctx.sandboxPolicy.resolve({ session, mode: 'workspace-write' }).workspaceRoots ?? []
+    const opened = await ctx.sandboxPolicy.openPicked(config.selection.file)
+    const fresh = await ctx.agents.create({ sessionId: randomUUID(), meta: { cwd: config.selection.scope } })
+    result.selection = {
+      pickerKind: capability.kind,
+      pickerOverridden: String(capability.pick).includes('openPicked'),
+      opened,
+      fresh: rootsOf(fresh.agent.session),
+      earlier: rootsOf(blum.session),
+    }
+    await ctx.sandboxPolicy.openPicked(config.selection.scope)
+    await fresh.dispose()
     for (const handle of handles.values()) await handle.dispose()
     writeFileSync(config.out, JSON.stringify(result, null, 2))
   }
@@ -89,7 +102,7 @@ const cases = [
 ]
 writeFileSync(join(p.diarios, 'secret-entry.md'), 'x')
 writeFileSync(join(base, 'probe.mjs'), probe)
-writeFileSync(join(base, 'probe.patch.yml'), `- insert:\n    - id: lh-smoke-probe\n      name: ./probe.mjs\n      config: ${JSON.stringify({ out, cases, refs: { cwd: p.blum }, files: { extraRoot: p.assetsBlum, outside: p.outside } })}\n`)
+writeFileSync(join(base, 'probe.patch.yml'), `- insert:\n    - id: lh-smoke-probe\n      name: ./probe.mjs\n      config: ${JSON.stringify({ out, cases, refs: { cwd: p.blum }, files: { extraRoot: p.assetsBlum, outside: p.outside }, selection: { file: join(p.blum, 'Blum - BAUM.code-workspace'), scope: p.blum } })}\n`)
 
 let child
 let code = 1
@@ -141,6 +154,14 @@ try {
     && loaderErrors.length === 0
   if (!filesOk) failures += 1
   console.log(`${filesOk ? 'PASS' : 'FAIL'}  web file tree    provider=${files.provider} anchored=${files.anchored} extra-root=${JSON.stringify(files.extraRoot)} outside=${files.outside} client-bundles=${JSON.stringify(files.clientBundles)}${loaderErrors.length ? ` errors=${JSON.stringify(loaderErrors)}` : ''}`)
+  const sel = result.selection
+  const selectionOk = sel.pickerKind === 'native'
+    && sel.pickerOverridden === true
+    && sel.opened === p.blum
+    && sel.fresh.includes(p.shared) && !sel.fresh.includes(p.assetsBlum)
+    && sel.earlier.includes(p.assetsBlum)
+  if (!selectionOk) failures += 1
+  console.log(`${selectionOk ? 'PASS' : 'FAIL'}  workspace file   picker=${sel.pickerKind} overridden=${sel.pickerOverridden} opened=${sel.opened} new-session=${JSON.stringify(sel.fresh)} earlier-session=${JSON.stringify(sel.earlier)}`)
   child.kill('SIGTERM')
   await Promise.race([exited, sleep(10_000)])
   code = failures === 0 ? 0 : 1

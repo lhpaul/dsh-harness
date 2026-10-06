@@ -21,7 +21,7 @@ import {
   applyGrant,
   initGrants,
 } from '../packages/workspace-roots/src/root-grants.js'
-import { buildFixture, isMac, tempHomeDir } from './helpers.mjs'
+import { buildFixture, isMac, memoryStorageDomain, tempHomeDir } from './helpers.mjs'
 
 const call = (callId, name = ADD_ROOT_TOOL) => ({ type: 'tool/call', data: { name, callId, arguments: '{}', turn: 1, step: 1 } })
 const result = (callId, meta, { isError = false, surfaceOp = 'append' } = {}) => ({
@@ -113,6 +113,7 @@ describe('add_workspace_root (real sandbox composition)', () => {
     p.extra = join(p.home, 'Documents', 'LH', 'Personal', 'Extra')
     mkdirSync(p.extra, { recursive: true })
     ctx = new Context()
+    ctx.provide('storageDomain', memoryStorageDomain())
     ctx.provide('sessionProjections', {
       register: () => () => {},
       stateOf: (s, key) => (key === GRANTS_PROJECTION ? fold(logs.get(s.id) ?? []) : null),

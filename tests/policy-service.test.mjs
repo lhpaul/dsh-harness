@@ -16,7 +16,7 @@ import { LocalSandboxProvider } from '@deepseek-ai/dsh-sandbox-local'
 import { SandboxedFileSystem } from '@deepseek-ai/dsh-fs-sandbox'
 import WorkspaceRootsPolicyService, { assertPatchedRuntime, renderPolicyContext } from '../packages/workspace-roots/src/index.js'
 import { EXIT, run } from '../patch/dsh-multi-root.mjs'
-import { INSTALL_ROOT, buildFixture, isMac, tempHomeDir, writeJson } from './helpers.mjs'
+import { INSTALL_ROOT, buildFixture, isMac, memoryStorageDomain, tempHomeDir, writeJson } from './helpers.mjs'
 
 const UPSTREAM_WORKSPACE_WRITE = (root) => `Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: ${JSON.stringify(root)}. Some platform temporary areas may also be writable.`
 
@@ -34,6 +34,7 @@ describe('WorkspaceRootsPolicyService (real composition)', () => {
     ;[base, cleanup] = tempHomeDir()
     p = buildFixture(base)
     ctx = new Context()
+    ctx.provide('storageDomain', memoryStorageDomain())
     ctx.provide('sessionProjections', {
       register: () => () => {},
       stateOf: (s, key) => (key === 'sandboxMode' ? modes.get(s.id) ?? null : null),
@@ -182,6 +183,7 @@ describe('WorkspaceRootsPolicyService (real composition)', () => {
 
   test('invalid configuration fails at load', async () => {
     const c = new Context()
+    c.provide('storageDomain', memoryStorageDomain())
     c.provide('sessionProjections', { register: () => () => {}, stateOf: () => null })
     await assert.rejects(
       async () => { await c.plugin(WorkspaceRootsPolicyService, { mode: 'workspace-write', scopesRoot: 'relative', deniedWritePaths: [] }) },
