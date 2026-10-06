@@ -32,3 +32,8 @@
     # *.code-workspace files; the upstream directory-picker row stays.
     - id: directory-picker-workspace-roots
       name: dsh-lh-workspace-roots/directory-picker
+
+    # One more ctx.skills provider: the repos of a scope opened from its
+    # workspace file; upstream skill-filesystem stays.
+    - id: repo-skills-workspace-roots
+      name: dsh-lh-workspace-roots/repo-skills

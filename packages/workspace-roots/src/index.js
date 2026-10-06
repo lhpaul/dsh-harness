@@ -256,6 +256,21 @@ export class WorkspaceRootsPolicyService extends Service {
   }
 
   /**
+   * Repo folders of a scope opened as a workspace: when `cwd` is the scope
+   * directory itself, the folders inside it that its active workspace file
+   * lists (or all of its workspace files when none is active). Empty for any
+   * other cwd, including one inside a repo. Skill lookups carry only a cwd, so
+   * no session pin applies.
+   * @param {string} cwd - the lookup cwd.
+   * @returns {string[]} canonical existing directories inside the scope.
+   */
+  scopeFolders(cwd) {
+    const scope = this.roots.scopeOf(cwd)
+    if (scope === undefined || scope !== canonical(cwd)) return []
+    return this.roots.scopeFolders(cwd, this.selection?.activeFile(scope) ?? null)
+  }
+
+  /**
    * Record what the user opened from the Add workspace dialog and return the
    * directory DSH should register as the workspace: a `*.code-workspace` file
    * directly in a scope becomes that scope's active file (its directory is

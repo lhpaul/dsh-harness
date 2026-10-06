@@ -89,7 +89,7 @@ export class WorkspaceRootsResolver {
     this.scopesRoot = normalize(scopesRoot)
     this.homeDir = homeDir
     this.onWarning = onWarning
-    /** @type {Map<string, { signature: string, candidates: string[] }>} */
+    /** @type {Map<string, { signature: string, candidates: string[], inside: string[] }>} */
     this.cache = new Map()
   }
 
@@ -118,21 +118,37 @@ export class WorkspaceRootsResolver {
    * @returns {string[]} canonical, sorted, existing directories outside the scope.
    */
   extraRoots(cwd, file = null) {
+    return this.entryFor(cwd, file)?.candidates.filter(isDirectory) ?? []
+  }
+
+  /**
+   * Folders the same workspace files list INSIDE the scope directory (its
+   * repos), excluding the scope directory itself. Not writable roots: the
+   * scope directory already contains them.
+   * @param {string} cwd - absolute session working directory.
+   * @param {string | null} [file] - as for {@link extraRoots}.
+   * @returns {string[]} canonical, sorted, existing directories.
+   */
+  scopeFolders(cwd, file = null) {
+    return this.entryFor(cwd, file)?.inside.filter(isDirectory) ?? []
+  }
+
+  entryFor(cwd, file) {
     const scope = this.scopeOf(cwd)
-    if (scope === undefined) return []
+    if (scope === undefined) return undefined
     if (file !== null && !this.isWorkspaceFileOf(file, scope)) {
       this.warnOnce(`${scope}\0${file}`, `workspace-roots: workspace file ${JSON.stringify(file)} is not in ${scope}; no extra roots`)
-      return []
+      return undefined
     }
     const files = file === null ? this.workspaceFiles(scope) : [file]
     const key = `${scope}\0${file ?? ''}`
     const signature = this.signatureOf(files)
     let entry = this.cache.get(key)
     if (entry === undefined || entry.signature !== signature) {
-      entry = { signature, candidates: this.compute(scope, files) }
+      entry = { signature, ...this.compute(scope, files) }
       this.cache.set(key, entry)
     }
-    return entry.candidates.filter(isDirectory)
+    return entry
   }
 
   /**
@@ -186,10 +202,14 @@ export class WorkspaceRootsResolver {
 
   compute(scope, files) {
     const found = new Set()
+    const inside = new Set()
     for (const file of files) {
       for (const folder of this.foldersOf(file)) {
         const root = canonical(folder)
-        if (isWithin(root, scope)) continue
+        if (isWithin(root, scope)) {
+          if (root !== scope) inside.add(root)
+          continue
+        }
         const reason = this.rejection(root)
         if (reason !== undefined) {
           this.onWarning(`workspace-roots: ignoring folder ${JSON.stringify(root)} from ${file}: ${reason}`)
@@ -198,7 +218,7 @@ export class WorkspaceRootsResolver {
         found.add(root)
       }
     }
-    return [...found].sort()
+    return { candidates: [...found].sort(), inside: [...inside].sort() }
   }
 
   rejection(root) {

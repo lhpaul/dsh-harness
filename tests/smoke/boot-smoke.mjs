@@ -13,7 +13,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { REPO, buildFixture, tempHomeDir } from '../helpers.mjs'
@@ -30,7 +30,7 @@ import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 export const name = 'lh-smoke-probe'
-export const inject = ['sandboxPolicy', 'sandbox', 'fs', 'fileReferences', 'agents', 'sessionProjections', 'tools', 'workspaceFiles', 'typertGateway', 'clientModules', 'directoryPicker']
+export const inject = ['sandboxPolicy', 'sandbox', 'fs', 'fileReferences', 'agents', 'sessionProjections', 'tools', 'workspaceFiles', 'typertGateway', 'clientModules', 'directoryPicker', 'skills']
 export function apply(ctx, config) {
   const cases = config.cases
   const run = async () => {
@@ -74,6 +74,9 @@ export function apply(ctx, config) {
       rootsListing: await listVia('/.dsh-lh-workspace-roots'),
       clientBundles: ['dsh-lh-workspace-roots', '@deepseek-ai/dsh-api-workspace-files'].filter((id) => ctx.clientModules.table.has(id)),
     }
+    const skillNames = async (cwd) => (await ctx.skills.list({ cwd, scope: await agentFor(cwd) }))
+      .filter((skill) => skill.name.startsWith('smoke-')).map((skill) => skill.name + '@' + skill.provider)
+    result.skills = { scope: await skillNames(config.skills.scope), repo: await skillNames(config.skills.repo) }
     const capability = ctx.directoryPicker.capability()
     const rootsOf = (session) => ctx.sandboxPolicy.resolve({ session, mode: 'workspace-write' }).workspaceRoots ?? []
     const opened = await ctx.sandboxPolicy.openPicked(config.selection.file)
@@ -102,8 +105,10 @@ const cases = [
   { id: 'leasity-blum', cwd: p.leasityRepo, dir: p.assetsBlum, expect: false },
 ]
 writeFileSync(join(p.diarios, 'secret-entry.md'), 'x')
+mkdirSync(join(p.blumRepo, '.agents', 'skills', 'smoke-repo-skill'), { recursive: true })
+writeFileSync(join(p.blumRepo, '.agents', 'skills', 'smoke-repo-skill', 'SKILL.md'), '---\nname: smoke-repo-skill\ndescription: Repo skill of the smoke fixture\n---\n\nBody.\n')
 writeFileSync(join(base, 'probe.mjs'), probe)
-writeFileSync(join(base, 'probe.patch.yml'), `- insert:\n    - id: lh-smoke-probe\n      name: ./probe.mjs\n      config: ${JSON.stringify({ out, cases, refs: { cwd: p.blum }, files: { extraRoot: p.assetsBlum, outside: p.outside }, selection: { file: join(p.blum, 'Blum - BAUM.code-workspace'), scope: p.blum } })}\n`)
+writeFileSync(join(base, 'probe.patch.yml'), `- insert:\n    - id: lh-smoke-probe\n      name: ./probe.mjs\n      config: ${JSON.stringify({ out, cases, refs: { cwd: p.blum }, files: { extraRoot: p.assetsBlum, outside: p.outside }, selection: { file: join(p.blum, 'Blum - BAUM.code-workspace'), scope: p.blum }, skills: { scope: p.blum, repo: p.blumRepo } })}\n`)
 
 let child
 let code = 1
@@ -164,6 +169,12 @@ try {
     && sel.earlier.includes(p.assetsBlum)
   if (!selectionOk) failures += 1
   console.log(`${selectionOk ? 'PASS' : 'FAIL'}  workspace file   picker=${sel.pickerKind} overridden=${sel.pickerOverridden} opened=${sel.opened} new-session=${JSON.stringify(sel.fresh)} earlier-session=${JSON.stringify(sel.earlier)}`)
+  const skills = result.skills
+  // Probe agents mount no preset, so upstream's per-preset skill-filesystem lists nothing here.
+  const skillsOk = JSON.stringify(skills.scope) === '["smoke-repo-skill@lh-workspace-repos"]'
+    && !skills.repo.includes('smoke-repo-skill@lh-workspace-repos')
+  if (!skillsOk) failures += 1
+  console.log(`${skillsOk ? 'PASS' : 'FAIL'}  repo skills      scope-folder=${JSON.stringify(skills.scope)} inside-repo=${JSON.stringify(skills.repo)}`)
   child.kill('SIGTERM')
   await Promise.race([exited, sleep(10_000)])
   code = failures === 0 ? 0 : 1

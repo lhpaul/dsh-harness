@@ -2,7 +2,7 @@
   "name": "dsh-lh-workspace-roots",
   "version": "0.5.0",
   "private": true,
-  "description": "DSH sandbox-policy and file-reference replacements: per-session extra writable roots from ~/Git/<scope>/*.code-workspace and user-approved grants, denied write paths, multi-root @ completion, and a Web Roots tab over extra-root directory listings",
+  "description": "DSH sandbox-policy and file-reference replacements: per-session extra writable roots from ~/Git/<scope>/*.code-workspace and user-approved grants, denied write paths, multi-root @ completion, repo skills for workspace-file sessions, and a Web Roots tab over extra-root directory listings",
   "type": "module",
   "main": "src/index.js",
   "exports": {
@@ -10,6 +10,7 @@
     "./client": "./src/client.js",
     "./directory-picker": "./src/directory-picker.js",
     "./file-references": "./src/file-references.js",
+    "./repo-skills": "./src/repo-skills.js",
     "./workspace-files": "./src/workspace-files.js",
     "./package.json": "./package.json"
   },
@@ -36,6 +37,7 @@
     "@deepseek-ai/dsh-fs-sandbox": "0.2.0-rc.2",
     "@deepseek-ai/dsh-sandbox": "0.2.0-rc.2",
     "@deepseek-ai/dsh-sandbox-local": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-skill-filesystem": "0.2.0-rc.2",
     "@deepseek-ai/dsh-storage-domain": "0.2.0-rc.2",
     "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
     "@deepseek-ai/schemastery": "*",
