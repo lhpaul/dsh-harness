@@ -203,7 +203,9 @@ window.__ModuleLoader__.load({
             path: root,
             tree,
             label: h('span', { className: 'lhroots-name lhroots-rootname' }, basename(root)),
-            detail: h('span', { className: 'lhroots-path' }, root === primary ? t('root.primary') : root),
+            detail: root === primary
+              ? h('span', { className: 'lhroots-path' }, t('root.primary'))
+              : h('span', { className: 'lhroots-path', title: root }, h('bdi', null, root)),
           })))))
     }
 
