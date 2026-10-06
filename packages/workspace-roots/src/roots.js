@@ -66,7 +66,8 @@ function isDirectory(path) {
   }
 }
 
-function expandHome(path, homeDir) {
+/** Expand a leading `~` or `~/` against `homeDir`; other paths are returned unchanged. */
+export function expandHome(path, homeDir) {
   if (path === '~') return homeDir
   if (path.startsWith('~/')) return join(homeDir, path.slice(2))
   return path

@@ -36,7 +36,7 @@ describe('WorkspaceRootsPolicyService (real composition)', () => {
     ctx = new Context()
     ctx.provide('sessionProjections', {
       register: () => () => {},
-      stateOf: (s) => modes.get(s.id) ?? null,
+      stateOf: (s, key) => (key === 'sandboxMode' ? modes.get(s.id) ?? null : null),
     })
     ctx.provide('systemPrompt', {
       context: (c) => { contextText = c.text; return () => {} },

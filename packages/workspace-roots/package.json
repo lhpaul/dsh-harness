@@ -1,8 +1,8 @@
 {
   "name": "dsh-lh-workspace-roots",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
-  "description": "DSH sandbox-policy and file-reference replacements: per-session extra writable roots from ~/Git/<scope>/*.code-workspace, denied write paths, and multi-root @ completion",
+  "description": "DSH sandbox-policy and file-reference replacements: per-session extra writable roots from ~/Git/<scope>/*.code-workspace and user-approved grants, denied write paths, and multi-root @ completion",
   "type": "module",
   "main": "src/index.js",
   "exports": {
@@ -26,6 +26,7 @@
     "@deepseek-ai/dsh-fs-sandbox": "0.2.0-rc.2",
     "@deepseek-ai/dsh-sandbox": "0.2.0-rc.2",
     "@deepseek-ai/dsh-sandbox-local": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
     "@deepseek-ai/schemastery": "*",
     "zod": "^4.4.3"
   }

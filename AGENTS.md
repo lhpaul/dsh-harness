@@ -28,6 +28,7 @@ DSH needs Node `^22.19 || >=24`; older Node exits 0 silently. Use `bin/dsh` (it 
 - ESM JavaScript, no build step. The plugin declares its DSH packages as `peerDependencies` so they resolve to the profile runtime's copies.
 - A patch layer cannot rename a Loader row; replace a service by disabling the row and inserting a new one.
 - When changing the patch, update `HUNKS`, the verify script, `tests/patch.test.mjs`, and the README patch section together.
+- Never append a custom session event type: `append()` cannot mark it `ignorable`, and DSH then refuses to reload the session. Record plugin state in known types (a tool's `tool/call` + `tool/result.meta`) and fold it with a session projection, as `src/root-grants.js` does.
 - `src/file-references.js` subclasses upstream `LocalFileReferenceService` and mirrors its `scoreCandidate`; keep both in sync with the pinned version. It must never return candidates under `deniedWritePaths`.
 - Upgrade routine: README "Upgrading DSH".
 - Linux (bwrap/Landlock) is a documented gap; macOS Seatbelt is the target.

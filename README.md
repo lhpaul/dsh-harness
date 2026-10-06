@@ -1,6 +1,6 @@
 # dsh-harness
 
-LH's adaptation of the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) to the `~/Git/<scope>/*.code-workspace` model, without forking it. Each DSH session gets extra writable roots, the folders its scope's workspace files list outside `~/Git/<scope>/` (phase 1), and `@` file completion across all of them (phase 2).
+LH's adaptation of the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) to the `~/Git/<scope>/*.code-workspace` model, without forking it. Each DSH session gets extra writable roots: the folders its scope's workspace files list outside `~/Git/<scope>/` (phase 1). It gets `@` file completion across all of them (phase 2). The agent can also ask the user to approve one more writable directory for the rest of the session (phase 3).
 
 Strategy, decisions and verified traps live in the vault note `~/Git/Cerebro/LH/20 - Proyectos/Infra-Harness-DSH.md`. The upstream reference clone `~/Git/DevStack/deepseek-harness` is read-only.
 
@@ -13,6 +13,7 @@ Strategy, decisions and verified traps live in the vault note `~/Git/Cerebro/LH/
 | Patch verify | `patch/dsh-multi-root-verify.mjs` | Loads the real installed modules and checks bash (Seatbelt) and fs writes against a temp policy. |
 | Policy plugin | `packages/workspace-roots/` (`dsh-lh-workspace-roots`) | Cordis plugin that provides `ctx.sandboxPolicy` in place of `@deepseek-ai/dsh-sandbox-policy`. |
 | `@` completion plugin | `dsh-lh-workspace-roots/file-references` (same package) | Provides `ctx.fileReferences` in place of `@deepseek-ai/dsh-file-reference-local`, across all roots. |
+| Root grants | `src/root-grants.js` (registered by the policy plugin) | The `add_workspace_root` tool and the `workspaceRootGrants` session projection. |
 | Launcher | `bin/dsh`, `bin/dsh-node` | Runs the pinned runtime under a Node that satisfies `^22.19 \|\| >=24`. `~/.local/bin/dsh` symlinks here. |
 | Bootstrap | `bootstrap.sh` | install → patch → wire profile → launcher → verify. Idempotent; `--revert` undoes it. |
 
@@ -24,6 +25,31 @@ Strategy, decisions and verified traps live in the vault note `~/Git/Cerebro/LH/
 - A malformed file, or one without a `folders` array, logs a warning and contributes nothing; the session keeps running.
 - Roots that are `/`, `$HOME` or an ancestor of it, or that contain `~/Git`, are refused with a warning.
 - The policy context in the system prompt names the extra roots and the denied paths; without extra roots it is identical to upstream's text.
+
+### Session grants (`add_workspace_root`)
+
+The model calls `add_workspace_root({ path, reason })` when a task must write outside the current roots:
+
+1. The tool expands `~/` and canonicalizes the path. It refuses a relative or missing path, a non-directory, `/`, `$HOME` or its ancestors, anything containing `~/Git`, and anything under `deniedWritePaths`.
+2. A path already inside a writable root returns `already-writable` without asking.
+3. Otherwise it calls `ctx.approval.request()`. The approval request carries no tool arguments, so the audited reason names the path: `Make <path> writable for the rest of this session. Reason: <reason>`.
+4. The answer maps to `granted`, `rejected`, `cancelled` or `unavailable` (no approval service mounted, or no answerer). Under the `never` approval policy (the Full access preset), every request is rejected.
+
+A grant is recorded only in event types every DSH build knows, so the session stays loadable with or without this plugin:
+
+- The tool's own `tool/call` carries its name and arguments.
+- Its appended `tool/result` carries `meta: { grantedRoot }`, written by `output.presentationMeta` only when the status is `granted`.
+- `approval/asked` and `approval/decided` record the audit.
+
+The `workspaceRootGrants` projection pairs each `add_workspace_root` call with its result. `resolve()` adds the grants to the workspace-file roots and re-checks them on every call: a granted directory that disappears or fails the root guard is skipped. The Seatbelt profile, the fs fence, `@` completion and the policy context all see a grant on the next call.
+
+A custom `sandbox/roots` event type was rejected. `Session.append()` cannot mark an event `ignorable`, and persistence refuses to reload a log that contains an unknown non-ignorable type, even when this plugin is loaded, because the known-type list is fixed at build time. One grant would make the session unloadable after a restart.
+
+Limits:
+
+- **Scope and revocation:** grants last for the session; there is no revocation. Forks that seed the parent log inherit them; fresh subagents do not.
+- **Code mode:** calls from inside `run_code` are refused, because nested dispatches do not persist `meta`.
+- **Web UI:** the Web UI shows the generic tool card.
 
 ### `@` completion across roots
 
@@ -85,7 +111,7 @@ Bootstrap never touches `~/.dsh/sessions`, `~/.dsh/storages` or credentials. Tes
 
 1. Stop `dsh web`.
 2. Bump `@deepseek-ai/dsh` in `package.json` to the exact new version and check out the matching tag in `~/Git/DevStack/deepseek-harness`.
-3. Bump the `0.2.0-rc.2` peer pins in `packages/workspace-roots/package.json`, then diff upstream `dsh-file-reference-local` against `src/file-references.js`: the `LocalFileReferenceService` constructor and `list()` signature, the `WorkspaceFileSearch` exports, and `scoreCandidate` in `search.ts`, which `file-references.js` mirrors.
+3. Bump the `0.2.0-rc.2` peer pins in `packages/workspace-roots/package.json`, then diff upstream `dsh-file-reference-local` against `src/file-references.js`: the `LocalFileReferenceService` constructor and `list()` signature, the `WorkspaceFileSearch` exports, and `scoreCandidate` in `search.ts`, which `file-references.js` mirrors. For root grants, re-check the `tool/call` and `tool/result` data fields (`name`, `callId`, `message.source.callId`, `meta`, `surfaceOp`), the approval outcome vocabulary, and the `ToolExecution.parent` semantics that `root-grants.js` relies on.
 4. Run `./bootstrap.sh`. It runs `npm ci` and applies the patch. If an anchor moved, the patch fails loudly and changes nothing.
 5. If the patch fails, read the new `writableRoots`, `seatbeltProfileArgs` and `checkedTarget` in the reference clone, update `HUNKS` in `patch/dsh-multi-root.mjs`, and re-run. Also diff upstream `dsh-sandbox-policy` (config, `sandboxMode` projection, policy context text) against `packages/workspace-roots/src/index.js`.
 6. Bootstrap's verify step must pass: composed config, patch verify, boot smoke, tests. If it does not, revert the pin and run `npm ci && ./bootstrap.sh`.
@@ -94,5 +120,5 @@ Bootstrap never touches `~/.dsh/sessions`, `~/.dsh/storages` or credentials. Tes
 ## Next phases
 
 - **Phase 2 (done):** `@` file completion across all roots.
-- **Phase 3:** a tool to add a root at runtime with user approval, recorded as a `sandbox/roots` session event (model-visible ⟺ logged).
+- **Phase 3 (done):** `add_workspace_root`, user-approved session grants recorded in known event types (see "Session grants").
 - **Phase 4:** optional multi-root file tree in the Web UI; publish the plugin under the `dsh-plugin` topic and follow upstream #5505.

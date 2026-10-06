@@ -5,7 +5,8 @@
  * temp HOME holding a fixture ~/Git (Blum, Leasity, vault with Diarios) — plus
  * a probe plugin (via --patch) that resolves policies for fixture sessions and
  * writes through the app's own ctx.sandbox (Seatbelt) and ctx.fs (fs fence),
- * then queries ctx.fileReferences (`@` completion) across roots.
+ * using real agents/sessions, then queries ctx.fileReferences (`@` completion)
+ * across roots and checks the add_workspace_root tool and grants projection.
  * Never touches ~/.dsh or the real ~/Git.
  *
  * Usage: node tests/smoke/boot-smoke.mjs   (exit 0 pass, 1 fail)
@@ -25,16 +26,22 @@ const DSH = join(REPO, 'bin', 'dsh')
 
 const probe = `
 import { spawnSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 export const name = 'lh-smoke-probe'
-export const inject = ['sandboxPolicy', 'sandbox', 'fs', 'fileReferences']
+export const inject = ['sandboxPolicy', 'sandbox', 'fs', 'fileReferences', 'agents', 'sessionProjections', 'tools']
 export function apply(ctx, config) {
   const cases = config.cases
   const run = async () => {
     const result = { provider: ctx.sandboxPolicy.constructor.name, deniedWritePaths: ctx.sandboxPolicy.deniedWritePaths, cases: [] }
+    const handles = new Map()
+    const agentFor = async (cwd) => {
+      if (!handles.has(cwd)) handles.set(cwd, await ctx.agents.create({ sessionId: randomUUID(), meta: { cwd } }))
+      return handles.get(cwd).agent
+    }
     for (const c of cases) {
-      const session = { id: c.id, header: { cwd: c.cwd } }
+      const session = (await agentFor(c.cwd)).session
       const policy = ctx.sandboxPolicy.resolve({ session, mode: 'workspace-write' })
       const target = join(c.dir, 'smoke-' + c.id)
       const { argv } = await ctx.sandbox.confine(['/bin/sh', '-c', "printf x > '" + target + ".bash'"], policy)
@@ -44,13 +51,18 @@ export function apply(ctx, config) {
       catch (e) { fs = e.code === 'FS_SANDBOX_DENIED' ? false : String(e) }
       result.cases.push({ ...c, bash, fs, workspaceRoots: policy.workspaceRoots ?? [] })
     }
-    const blum = { session: { id: 'refs', header: { cwd: config.refs.cwd } } }
+    const blum = await agentFor(config.refs.cwd)
+    result.grants = {
+      tool: ctx.tools.get('add_workspace_root', blum) !== undefined,
+      state: ctx.sessionProjections.stateOf(blum.session, 'workspaceRootGrants'),
+    }
     const signal = new AbortController().signal
     result.refs = {
       provider: ctx.fileReferences.constructor.name,
       asset: await ctx.fileReferences.list(blum, 'smoke-blum-assets', signal),
       diarios: await ctx.fileReferences.list(blum, 'secret-entry', signal),
     }
+    for (const handle of handles.values()) await handle.dispose()
     writeFileSync(config.out, JSON.stringify(result, null, 2))
   }
   run().catch((e) => writeFileSync(config.out, JSON.stringify({ error: String(e && e.stack || e) })))
@@ -104,6 +116,10 @@ try {
     && refs.diarios.length === 0
   if (!refsOk) failures += 1
   console.log(`${refsOk ? 'PASS' : 'FAIL'}  @ completion     provider=${refs.provider} extra-root=${JSON.stringify(assetPaths)} diarios=${JSON.stringify(refs.diarios)}`)
+  const grantsOk = result.grants.tool === true
+    && JSON.stringify(result.grants.state) === JSON.stringify({ pending: [], roots: [] })
+  if (!grantsOk) failures += 1
+  console.log(`${grantsOk ? 'PASS' : 'FAIL'}  root grants      add_workspace_root registered=${result.grants.tool} projection=${JSON.stringify(result.grants.state)}`)
   child.kill('SIGTERM')
   await Promise.race([exited, sleep(10_000)])
   code = failures === 0 ? 0 : 1
