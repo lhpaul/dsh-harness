@@ -109,6 +109,37 @@ describe('WorkspaceRootsResolver', () => {
     assert.deepEqual(make().extraRoots(scope), [])
   })
 
+  test('firstFolder is the first in-scope directory entry, else the scope', () => {
+    const r = make()
+    assert.equal(r.firstFolder(join(p.blum, 'Blum.code-workspace'), p.blum), p.blumRepo)
+    const scope = join(p.git, 'First')
+    mkdirSync(join(scope, 'repo'), { recursive: true })
+    const file = join(scope, 'First.code-workspace')
+    writeJson(file, { folders: [{ path: '.' }, { path: 'repo' }] })
+    assert.equal(r.firstFolder(file, scope), scope, 'the scope itself')
+    writeJson(file, { folders: [] })
+    utimesSync(file, new Date(), new Date(Date.now() + 5000))
+    assert.equal(r.firstFolder(file, scope), scope, 'no folders')
+  })
+
+  test('sibling repos of a named file are extra roots only for sessions in one of its folders', () => {
+    const r = make()
+    const scope = join(p.git, 'Siblings')
+    const [a, b] = [join(scope, 'a'), join(scope, 'b')]
+    mkdirSync(a, { recursive: true })
+    mkdirSync(b, { recursive: true })
+    mkdirSync(join(scope, 'c'), { recursive: true })
+    const file = join(scope, 'Siblings.code-workspace')
+    writeJson(file, { folders: [{ path: 'a' }, { path: 'b' }] })
+    assert.deepEqual(r.extraRoots(a, file), [b])
+    assert.deepEqual(r.extraRoots(scope, file), [])
+    assert.deepEqual(r.extraRoots(join(scope, 'c'), file), [])
+    assert.deepEqual(r.extraRoots(a), [], 'the union never adds siblings')
+    assert.deepEqual(r.scopeFolders(scope, file), [a, b])
+    assert.deepEqual(r.scopeFolders(a, file), [b])
+    assert.deepEqual(r.scopeFolders(a), [])
+  })
+
   test('scopesRoot must be absolute', () => {
     assert.throws(() => new WorkspaceRootsResolver({ scopesRoot: 'Git' }), /absolute/)
   })

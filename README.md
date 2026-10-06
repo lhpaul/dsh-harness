@@ -17,7 +17,7 @@ Strategy, decisions and verified traps live in the vault note `~/Git/Cerebro/LH/
 | Directory listings | `dsh-lh-workspace-roots/workspace-files` (same package) | Lets upstream `ctx.workspaceFiles` list and watch directories inside the extra roots. |
 | Web Roots tab | `src/client.js` (the package's `./client` bundle) | Right-sidebar tab with one file tree per root. |
 | Workspace files | `dsh-lh-workspace-roots/directory-picker`, `src/workspace-selection.js` | Add workspace also opens a `*.code-workspace` file; each session keeps the file that was active when it started. |
-| Repo skills | `dsh-lh-workspace-roots/repo-skills` (same package) | Sessions in a scope folder also get the `/` skills of the repos its workspace file lists. |
+| Repo skills | `dsh-lh-workspace-roots/repo-skills` (same package) | Sessions opened from a workspace file also get the `/` skills of its other repos. |
 | Launcher | `bin/dsh`, `bin/dsh-node` | Runs the pinned runtime under a Node that satisfies `^22.19 \|\| >=24`. `~/.local/bin/dsh` symlinks here. |
 | Bootstrap | `bootstrap.sh` | install → patch → wire profile → launcher → verify. Idempotent; `--revert` undoes it. |
 
@@ -34,9 +34,11 @@ Strategy, decisions and verified traps live in the vault note `~/Git/Cerebro/LH/
 
 A scope often has several workspace files (`DevStack - DSH`, `DevStack - Helm`, …), and the union of all of them is broader than any one task. On macOS, the Web **Add workspace** button opens one panel that accepts a folder or a `*.code-workspace` file:
 
-- **A workspace file directly in a scope folder** becomes that scope's *active file*, and the scope folder is registered as the DSH workspace (DSH workspaces are directories, one per path).
+- **A workspace file directly in a scope folder** becomes that scope's *active file*, and its first folder is registered as the DSH workspace (DSH workspaces are directories, one per path), so sessions start there and the session header's "open in" menu opens that repo. When the first folder is not an existing directory inside the scope (or is the scope itself), the scope folder is registered instead.
 - **The scope folder itself** clears the active file: back to the union.
 - **Any other folder** is registered unchanged. A workspace file anywhere else is refused with an error.
+
+A session whose cwd lies in one of its workspace file's in-scope folders also gets the file's other in-scope folders as extra roots, because the scope folder that used to contain them is no longer the cwd. A deeper cwd (`seia/src`) also reaches the listed folder above it (`seia`). Sessions using the union of a scope's files never get sibling folders. With an active file set, a folder of that file opened directly through Add workspace behaves the same way.
 
 Each session pins its scope's active file (or the union) the first time its roots are resolved, and keeps it: switching the active file later affects only new sessions, so a running session never gains roots silently. Forks inherit the parent's pin; sessions that existed before this feature pin whatever is active the first time they are resolved after it. A pinned file is re-read on every call; if it is deleted, the session gets no workspace-file roots and a warning is logged.
 
@@ -44,9 +46,9 @@ Active files and pins live in the `dsh_lh_workspace_roots` storage domain (`ctx.
 
 ### Repo skills in workspace-file sessions
 
-Upstream finds project skills (`/` commands) only in `.dsh/skills` and `.agents/skills` at the project root of the session cwd. A session opened from a workspace file runs in the scope folder, so skills defined in its repos (`~/Git/Radar Insights/seia/.agents/skills/run-work`) would be missing. `dsh-lh-workspace-roots/repo-skills` registers one more `ctx.skills` provider, `lh-workspace-repos`: when the lookup cwd is a scope folder itself, it scans those two directories in every folder inside the scope that the scope's active workspace file lists (all of its workspace files when none is active). Skill lookups carry only the cwd, so this follows the active file, not the session's pin. Lookups from any other cwd, including one inside a repo, get nothing from it.
+Upstream finds project skills (`/` commands) only in `.dsh/skills` and `.agents/skills` at the project root of the session cwd. A session opened from a workspace file runs in its first repo (or in the scope folder), so skills defined in the file's other repos would be missing. `dsh-lh-workspace-roots/repo-skills` registers one more `ctx.skills` provider, `lh-workspace-repos`, that scans those two directories in the in-scope folders the session does not already reach, per the scope's active workspace file: every in-scope folder the file lists when the cwd is the scope folder (all of the scope's files when none is active), or the file's other in-scope folders when the cwd lies in one of them. Skill lookups carry only the cwd, so this follows the active file, not the session's pin. Lookups from anywhere else get nothing from it.
 
-Each repo is served by an upstream `FileSystemSkillProvider` limited to its two directories, so parsing and watching are upstream's. The provider registers in the registry's global layer, which every agent's catalog merges; a skill of the same name in the agent's preset layer (the cwd's project skills, `~/.dsh/skills`, `~/.agents/skills`) wins over a repo skill. Repo `AGENTS.md` files are still not loaded; open the repo folder itself when you need them.
+Each repo is served by an upstream `FileSystemSkillProvider` limited to its two directories, so parsing and watching are upstream's. The provider registers in the registry's global layer, which every agent's catalog merges; a skill of the same name in the agent's preset layer (the cwd's project skills, `~/.dsh/skills`, `~/.agents/skills`) wins over a repo skill. The first repo's `AGENTS.md` loads normally (it is the session's project root); the other repos' `AGENTS.md` files are not loaded.
 
 ### Session grants (`add_workspace_root`)
 

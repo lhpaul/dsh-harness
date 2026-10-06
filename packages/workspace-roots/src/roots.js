@@ -7,7 +7,10 @@
  * file directly inside that scope directory is read — or only one of them,
  * when the caller names the session's selected file — and each folder entry
  * that resolves OUTSIDE the scope directory is an extra root (union across
- * files, canonical, deduplicated, sorted). A cwd outside `scopesRoot`, or equal to
+ * files, canonical, deduplicated, sorted). With a named file, a session whose
+ * cwd lies in one of the file's folders inside the scope also gets the file's
+ * other in-scope folders (a session opened from the file starts in its first
+ * folder, not the scope directory). A cwd outside `scopesRoot`, or equal to
  * it, has no scope and therefore no extra roots.
  *
  * Results are cached per scope and invalidated whenever the set of workspace
@@ -74,6 +77,18 @@ export function expandHome(path, homeDir) {
   return path
 }
 
+/**
+ * In-scope folders of a workspace file that a session in `cwd` belongs to but
+ * does not contain: when one of `inside` holds `cwd`, every folder of `inside`
+ * not already under `cwd`; otherwise none (the session is not in that file's
+ * workspace).
+ */
+function siblingFolders(inside, cwd) {
+  const real = canonical(cwd)
+  if (!inside.some((folder) => isWithin(real, folder))) return []
+  return inside.filter((folder) => !isWithin(folder, real))
+}
+
 /** Resolves and caches per-scope extra roots. */
 export class WorkspaceRootsResolver {
   /**
@@ -118,19 +133,41 @@ export class WorkspaceRootsResolver {
    * @returns {string[]} canonical, sorted, existing directories outside the scope.
    */
   extraRoots(cwd, file = null) {
-    return this.entryFor(cwd, file)?.candidates.filter(isDirectory) ?? []
+    const entry = this.entryFor(cwd, file)
+    if (entry === undefined) return []
+    const siblings = file === null ? [] : siblingFolders(entry.inside, cwd)
+    return [...new Set([...entry.candidates, ...siblings])].filter(isDirectory).sort()
   }
 
   /**
-   * Folders the same workspace files list INSIDE the scope directory (its
-   * repos), excluding the scope directory itself. Not writable roots: the
-   * scope directory already contains them.
+   * Folders the workspace files list INSIDE the scope directory (its repos)
+   * that a session in `cwd` does not already reach: all of them when `cwd` is
+   * the scope directory; with a named `file`, the folders other than the one
+   * holding `cwd` (see {@link extraRoots}); otherwise none.
    * @param {string} cwd - absolute session working directory.
    * @param {string | null} [file] - as for {@link extraRoots}.
    * @returns {string[]} canonical, sorted, existing directories.
    */
   scopeFolders(cwd, file = null) {
-    return this.entryFor(cwd, file)?.inside.filter(isDirectory) ?? []
+    const entry = this.entryFor(cwd, file)
+    if (entry === undefined) return []
+    if (canonical(cwd) === this.scopeOf(cwd)) return entry.inside.filter(isDirectory)
+    return file === null ? [] : siblingFolders(entry.inside, cwd).filter(isDirectory)
+  }
+
+  /**
+   * The folder a session opened from `file` starts in: its first folder entry
+   * when that is an existing directory inside the scope (not the scope
+   * itself), otherwise the scope directory.
+   * @param {string} file - a workspace file directly inside `scope`.
+   * @param {string} scope - canonical scope directory.
+   * @returns {string} canonical directory.
+   */
+  firstFolder(file, scope) {
+    const first = this.foldersOf(file)[0]
+    if (first === undefined) return scope
+    const folder = canonical(first)
+    return folder !== scope && isWithin(folder, scope) && isDirectory(folder) ? folder : scope
   }
 
   entryFor(cwd, file) {

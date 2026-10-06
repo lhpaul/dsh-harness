@@ -6,8 +6,8 @@
  * this plugin replaces the `pick` of the live capability object with one
  * `NSOpenPanel` that can choose either kind. The result goes through
  * `ctx.sandboxPolicy.openPicked()`: a workspace file becomes its scope's
- * active file and its directory is returned, so DSH still registers a
- * directory as the workspace. The browse interaction and other platforms keep
+ * active file and its first folder inside the scope (else the scope directory)
+ * is returned, so DSH still registers a directory as the workspace. The browse interaction and other platforms keep
  * the upstream chooser.
  *
  * The capability object is stable for the service lifetime (the seam's

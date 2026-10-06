@@ -1,19 +1,18 @@
 /**
- * Skills of the repos a scope's workspace file lists, for sessions opened on
- * the scope folder itself (`~/Git/<scope>`).
+ * Skills of the other repos a scope's workspace file lists.
  *
  * Upstream skill-filesystem scans `.dsh/skills` and `.agents/skills` only at
  * the project root found from the session cwd. A session opened from a
- * workspace file runs in the scope folder, so `<scope>/<repo>/.agents/skills`
- * is never scanned and `/` commands defined in the repos are missing. This
- * plugin registers one more `ctx.skills` provider that scans those two
- * directories in every folder `sandboxPolicy.scopeFolders(cwd)` returns. Each
+ * workspace file runs in its first repo (or in the scope folder), so the
+ * skills of the file's other repos are never scanned. This plugin registers
+ * one more `ctx.skills` provider that scans those two directories in every
+ * folder `sandboxPolicy.scopeFolders(cwd)` returns. Each
  * folder is served by an upstream `FileSystemSkillProvider` limited to that
  * folder's two directories (`includeDefaultRoots: false`), so parsing,
  * watching and ranks stay upstream's: repo skills carry the custom-root rank,
  * below the cwd's own project skills and above user skills.
  *
- * Repo `AGENTS.md` files are not loaded.
+ * The other repos' `AGENTS.md` files are not loaded.
  *
  * @module dsh-lh-workspace-roots/repo-skills
  */

@@ -59,6 +59,23 @@ describe('repo skills for workspace-file sessions', () => {
     }
   })
 
+  test('from one repo of the active file, scopeFolders lists its other repos', async () => {
+    const scope = join(p.git, 'Pair')
+    const [first, second] = [join(scope, 'first'), join(scope, 'second')]
+    writeSkill(join(second, '.agents', 'skills'), 'second-skill', 'Skill of the second repo')
+    writeSkill(join(first, '.agents', 'skills'), 'first-skill', 'Skill of the first repo')
+    const file = join(scope, 'Pair.code-workspace')
+    writeJson(file, { folders: [{ path: 'first' }, { path: 'second' }] })
+    assert.deepEqual(policy.scopeFolders(first), [], 'no active file: no siblings')
+    assert.equal(await policy.openPicked(file), first)
+    try {
+      assert.deepEqual(policy.scopeFolders(first), [second])
+      assert.deepEqual((await provider.list({ cwd: first })).map((skill) => skill.name), ['second-skill'])
+    } finally {
+      await policy.openPicked(scope)
+    }
+  })
+
   test('a scope-folder lookup lists and loads the repo skills', async () => {
     const listed = await provider.list({ cwd: p.blum })
     assert.ok(Array.isArray(listed))

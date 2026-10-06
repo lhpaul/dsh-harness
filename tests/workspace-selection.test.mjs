@@ -6,7 +6,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { rmSync } from 'node:fs'
+import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { after, before, describe, test } from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
@@ -47,10 +47,10 @@ describe('workspace-file selection', () => {
     assert.deepEqual(rootsOf(session('union', p.blumRepo)), [p.shared, p.assetsBlum, p.vault].sort())
   })
 
-  test('opening a workspace file returns its scope and narrows new sessions to that file', async () => {
+  test('opening a workspace file returns its first folder and narrows new sessions to that file', async () => {
     const before = session('before-pick', p.blum)
     rootsOf(before)
-    assert.equal(await policy.openPicked(blumFile), p.blum)
+    assert.equal(await policy.openPicked(blumFile), p.blumRepo)
     assert.deepEqual(rootsOf(session('after-pick', p.blumRepo)), [p.assetsBlum, p.vault].sort())
     assert.ok(rootsOf(before).includes(p.shared), 'a session resolved before the pick keeps its pin')
   })
@@ -81,10 +81,37 @@ describe('workspace-file selection', () => {
     await assert.rejects(policy.openPicked(nested), /not a workspace file directly inside/)
   })
 
+  test('a session in one repo of the opened file also gets its other in-scope repos', async () => {
+    const scope = join(p.git, 'Multi')
+    const [app, api, notes] = ['app', 'api', 'notes'].map((name) => join(scope, name))
+    for (const dir of [app, join(api, 'src'), notes]) mkdirSync(dir, { recursive: true })
+    const file = join(scope, 'Multi.code-workspace')
+    writeJson(file, { folders: [{ path: 'app' }, { path: 'api' }, { path: '../../Documents/LH/Negocios/Shared' }] })
+    assert.equal(await policy.openPicked(file), app)
+    assert.deepEqual(rootsOf(session('multi-app', app)), [api, p.shared].sort())
+    assert.deepEqual(rootsOf(session('multi-deep', join(api, 'src'))), [api, app, p.shared].sort(), 'a listed repo above the cwd is reached too')
+    assert.deepEqual(rootsOf(session('multi-scope', scope)), [p.shared])
+    assert.deepEqual(rootsOf(session('multi-unlisted', notes)), [p.shared])
+    await policy.openPicked(scope)
+    assert.deepEqual(rootsOf(session('multi-union', app)), [p.shared], 'without a file, no sibling repos')
+  })
+
+  test('a workspace file whose first folder is not a repo of the scope opens the scope folder', async () => {
+    const outsideFirst = join(p.leasity, 'Leasity - Assets first.code-workspace')
+    writeJson(outsideFirst, { folders: [{ path: '../../Documents/LH/Negocios/Proyectos/Leasity' }, { path: 'leasity-mvp-webapp' }] })
+    assert.equal(await policy.openPicked(outsideFirst), p.leasity)
+    const missingFirst = join(p.leasity, 'Leasity - Missing first.code-workspace')
+    writeJson(missingFirst, { folders: [{ path: 'gone' }, { path: 'leasity-mvp-webapp' }] })
+    assert.equal(await policy.openPicked(missingFirst), p.leasity)
+    rmSync(outsideFirst)
+    rmSync(missingFirst)
+    await policy.openPicked(p.leasity)
+  })
+
   test('a pinned file that disappears yields no file roots', async () => {
     const temp = join(p.leasity, 'Leasity - Temp.code-workspace')
     writeJson(temp, { folders: [{ path: '../../Documents/LH/Negocios/Shared' }] })
-    await policy.openPicked(temp)
+    assert.equal(await policy.openPicked(temp), p.leasity)
     const s = session('temp', p.leasityRepo)
     assert.deepEqual(rootsOf(s), [p.shared])
     rmSync(temp)

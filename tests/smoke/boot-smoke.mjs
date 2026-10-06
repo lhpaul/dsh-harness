@@ -80,7 +80,7 @@ export function apply(ctx, config) {
     const capability = ctx.directoryPicker.capability()
     const rootsOf = (session) => ctx.sandboxPolicy.resolve({ session, mode: 'workspace-write' }).workspaceRoots ?? []
     const opened = await ctx.sandboxPolicy.openPicked(config.selection.file)
-    const fresh = await ctx.agents.create({ sessionId: randomUUID(), meta: { cwd: config.selection.scope } })
+    const fresh = await ctx.agents.create({ sessionId: randomUUID(), meta: { cwd: opened } })
     result.selection = {
       pickerKind: capability.kind,
       pickerOverridden: String(capability.pick).includes('openPicked'),
@@ -164,7 +164,7 @@ try {
   const sel = result.selection
   const selectionOk = sel.pickerKind === 'native'
     && sel.pickerOverridden === true
-    && sel.opened === p.blum
+    && sel.opened === p.blumRepo
     && sel.fresh.includes(p.shared) && !sel.fresh.includes(p.assetsBlum)
     && sel.earlier.includes(p.assetsBlum)
   if (!selectionOk) failures += 1

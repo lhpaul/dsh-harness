@@ -256,26 +256,26 @@ export class WorkspaceRootsPolicyService extends Service {
   }
 
   /**
-   * Repo folders of a scope opened as a workspace: when `cwd` is the scope
-   * directory itself, the folders inside it that its active workspace file
-   * lists (or all of its workspace files when none is active). Empty for any
-   * other cwd, including one inside a repo. Skill lookups carry only a cwd, so
-   * no session pin applies.
+   * Repo folders of the scope that a lookup in `cwd` does not already reach,
+   * per the scope's active workspace file (or all of its workspace files when
+   * none is active); see `WorkspaceRootsResolver.scopeFolders`. Skill lookups
+   * carry only a cwd, so no session pin applies.
    * @param {string} cwd - the lookup cwd.
    * @returns {string[]} canonical existing directories inside the scope.
    */
   scopeFolders(cwd) {
     const scope = this.roots.scopeOf(cwd)
-    if (scope === undefined || scope !== canonical(cwd)) return []
+    if (scope === undefined) return []
     return this.roots.scopeFolders(cwd, this.selection?.activeFile(scope) ?? null)
   }
 
   /**
    * Record what the user opened from the Add workspace dialog and return the
    * directory DSH should register as the workspace: a `*.code-workspace` file
-   * directly in a scope becomes that scope's active file (its directory is
-   * returned); a scope directory clears its active file; any other directory
-   * is returned unchanged.
+   * directly in a scope becomes that scope's active file, and its first folder
+   * inside the scope is returned (the scope directory when there is none); a
+   * scope directory clears its active file; any other directory is returned
+   * unchanged.
    * @param {string} picked - absolute path the user chose.
    * @returns {Promise<string>} the workspace directory.
    * @throws when a workspace file does not lie directly in a scope directory.
@@ -288,7 +288,7 @@ export class WorkspaceRootsPolicyService extends Service {
         throw new Error(`${JSON.stringify(path)} is not a workspace file directly inside a folder of ${this.roots.scopesRoot}`)
       }
       await this.selection.setActiveFile(scope, path)
-      return scope
+      return this.roots.firstFolder(path, scope)
     }
     if (this.roots.scopeOf(path) === path) await this.selection.setActiveFile(path, null)
     return path
