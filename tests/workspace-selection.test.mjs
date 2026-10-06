@@ -11,7 +11,7 @@ import { join } from 'node:path'
 import { after, before, describe, test } from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
 import WorkspaceRootsPolicyService from '../packages/workspace-roots/src/index.js'
-import { workspacePick } from '../packages/workspace-roots/src/directory-picker.js'
+import { titleWorkspace, workspacePick } from '../packages/workspace-roots/src/directory-picker.js'
 import { WorkspaceSelection } from '../packages/workspace-roots/src/workspace-selection.js'
 import { buildFixture, memoryStorageDomain, tempHomeDir, writeJson } from './helpers.mjs'
 
@@ -156,5 +156,35 @@ describe('workspace-file selection', () => {
     assert.equal(await workspacePick(async () => '/scope/A.code-workspace', fakePolicy)(new AbortController().signal), '/scope')
     assert.equal(await workspacePick(async () => null, fakePolicy)(new AbortController().signal), null)
     assert.deepEqual(opened, ['/scope/A.code-workspace'])
+  })
+
+  test('a picked workspace file titles its workspace; folders and failures do not block the pick', async () => {
+    const titled = []
+    const errors = []
+    const fakePolicy = { openPicked: async (path) => (path.endsWith('.code-workspace') ? '/scope/repo' : path) }
+    const onFile = async (directory, file) => { titled.push([directory, file]); if (file.includes('Broken')) throw new Error('boom') }
+    const pick = (path) => workspacePick(async () => path, fakePolicy, onFile, (error) => errors.push(error.message))(new AbortController().signal)
+    assert.equal(await pick('/scope/A.code-workspace'), '/scope/repo')
+    assert.equal(await pick('/scope/other'), '/scope/other')
+    assert.equal(await pick('/scope/Broken.code-workspace'), '/scope/repo')
+    assert.deepEqual(titled, [['/scope/repo', '/scope/A.code-workspace'], ['/scope/repo', '/scope/Broken.code-workspace']])
+    assert.deepEqual(errors, ['boom'])
+  })
+
+  test('titleWorkspace creates the workspace with the file name or retitles an existing one', async () => {
+    const calls = []
+    const existing = { title: 'seia', setTitle: async (title) => { calls.push(['setTitle', title]); existing.title = title } }
+    const registry = (found) => ({
+      resolveByPath: async (path) => { calls.push(['resolve', path]); return found },
+      create: async (path, title) => { calls.push(['create', path, title]) },
+    })
+    await titleWorkspace(registry(undefined), '/s/seia', '/s/Radar Insights.code-workspace')
+    await titleWorkspace(registry(existing), '/s/seia', '/s/Radar Insights.code-workspace')
+    await titleWorkspace(registry(existing), '/s/seia', '/s/Radar Insights.code-workspace')
+    assert.deepEqual(calls, [
+      ['resolve', '/s/seia'], ['create', '/s/seia', 'Radar Insights'],
+      ['resolve', '/s/seia'], ['setTitle', 'Radar Insights'],
+      ['resolve', '/s/seia'],
+    ])
   })
 })

@@ -7,7 +7,8 @@
  * `NSOpenPanel` that can choose either kind. The result goes through
  * `ctx.sandboxPolicy.openPicked()`: a workspace file becomes its scope's
  * active file and its first folder inside the scope (else the scope directory)
- * is returned, so DSH still registers a directory as the workspace. The browse interaction and other platforms keep
+ * is returned, so DSH still registers a directory as the workspace; that
+ * Workspace is titled after the workspace file (`titleWorkspace`). The browse interaction and other platforms keep
  * the upstream chooser.
  *
  * The capability object is stable for the service lifetime (the seam's
@@ -19,10 +20,12 @@
  */
 
 import { execFile } from 'node:child_process'
+import { basename } from 'node:path'
+import { WORKSPACE_SUFFIX } from './roots.js'
 
 export const name = 'dsh-lh-workspace-roots/directory-picker'
 
-export const inject = ['directoryPicker', 'sandboxPolicy']
+export const inject = ['directoryPicker', 'sandboxPolicy', 'workspaceRegistry']
 
 /** JXA run by `osascript -l JavaScript`; prints the chosen path, or nothing on cancel. */
 const OPEN_PANEL_SCRIPT = `
@@ -59,15 +62,43 @@ export function chooseFolderOrWorkspaceFile(signal) {
 }
 
 /**
+ * Title the Workspace registered for `directory` after the workspace file
+ * `file` (its name without `.code-workspace`): an existing registration is
+ * retitled, otherwise it is created with that title. The controller's create
+ * route then resolves this registration instead of creating one titled after
+ * the folder. Duplicate titles are allowed by the registry.
+ * @param {{ resolveByPath: (path: string) => Promise<{ title: string, setTitle: (title: string) => Promise<void> } | undefined>, create: (path: string, title?: string) => Promise<unknown> }} registry - `ctx.workspaceRegistry`.
+ * @param {string} directory - the directory DSH registers as the workspace.
+ * @param {string} file - the picked workspace file.
+ */
+export async function titleWorkspace(registry, directory, file) {
+  const title = basename(file, WORKSPACE_SUFFIX)
+  const existing = await registry.resolveByPath(directory)
+  if (existing === undefined) await registry.create(directory, title)
+  else if (existing.title !== title) await existing.setTitle(title)
+}
+
+/**
  * Build the replacement `pick`.
  * @param {(signal: AbortSignal) => Promise<string | null>} choose - the chooser.
  * @param {{ openPicked: (path: string) => Promise<string> }} policy - `ctx.sandboxPolicy`.
+ * @param {(directory: string, file: string) => Promise<void>} [onWorkspaceFile] - called after a workspace file opened `directory`; a failure is reported through `onError` and the pick still succeeds.
+ * @param {(error: unknown) => void} [onError] - receives `onWorkspaceFile` failures.
  * @returns {(signal: AbortSignal) => Promise<string | null>} a native-capability `pick`.
  */
-export function workspacePick(choose, policy) {
+export function workspacePick(choose, policy, onWorkspaceFile = async () => {}, onError = () => {}) {
   return async (signal) => {
     const picked = await choose(signal)
-    return picked === null ? null : policy.openPicked(picked)
+    if (picked === null) return null
+    const directory = await policy.openPicked(picked)
+    if (picked.endsWith(WORKSPACE_SUFFIX)) {
+      try {
+        await onWorkspaceFile(directory, picked)
+      } catch (error) {
+        onError(error)
+      }
+    }
+    return directory
   }
 }
 
@@ -83,7 +114,12 @@ export function apply(ctx) {
   }
   const upstream = capability.pick
   ctx.effect(() => {
-    capability.pick = workspacePick(chooseFolderOrWorkspaceFile, ctx.sandboxPolicy)
+    capability.pick = workspacePick(
+      chooseFolderOrWorkspaceFile,
+      ctx.sandboxPolicy,
+      (directory, file) => titleWorkspace(ctx.workspaceRegistry, directory, file),
+      (error) => { logger.warn(`could not title the workspace after its workspace file: ${error instanceof Error ? error.message : String(error)}`) },
+    )
     return () => {
       capability.pick = upstream
     }

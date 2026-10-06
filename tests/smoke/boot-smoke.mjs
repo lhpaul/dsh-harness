@@ -16,6 +16,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { pathToFileURL } from 'node:url'
 import { REPO, buildFixture, tempHomeDir } from '../helpers.mjs'
 
 const [base, cleanup] = tempHomeDir('.dsh-harness-smoke-')
@@ -30,7 +31,8 @@ import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 export const name = 'lh-smoke-probe'
-export const inject = ['sandboxPolicy', 'sandbox', 'fs', 'fileReferences', 'agents', 'sessionProjections', 'tools', 'workspaceFiles', 'typertGateway', 'clientModules', 'directoryPicker', 'skills']
+import { titleWorkspace } from ${JSON.stringify(pathToFileURL(join(REPO, 'packages', 'workspace-roots', 'src', 'directory-picker.js')).href)}
+export const inject = ['sandboxPolicy', 'sandbox', 'fs', 'fileReferences', 'agents', 'sessionProjections', 'tools', 'workspaceFiles', 'typertGateway', 'clientModules', 'directoryPicker', 'skills', 'workspaceRegistry', 'workspaceController']
 export function apply(ctx, config) {
   const cases = config.cases
   const run = async () => {
@@ -80,6 +82,12 @@ export function apply(ctx, config) {
     const capability = ctx.directoryPicker.capability()
     const rootsOf = (session) => ctx.sandboxPolicy.resolve({ session, mode: 'workspace-write' }).workspaceRoots ?? []
     const opened = await ctx.sandboxPolicy.openPicked(config.selection.file)
+    await titleWorkspace(ctx.workspaceRegistry, opened, config.selection.file)
+    const createdTitle = (await ctx.workspaceRegistry.resolveByPath(opened))?.title
+    await (await ctx.workspaceRegistry.resolveByPath(opened)).setTitle('docs')
+    await titleWorkspace(ctx.workspaceRegistry, opened, config.selection.file)
+    const viaController = await ctx.workspaceController.create({ path: opened })
+    result.title = { created: createdTitle, retitled: viaController.workspace.title, reused: viaController.created === false }
     const fresh = await ctx.agents.create({ sessionId: randomUUID(), meta: { cwd: opened } })
     result.selection = {
       pickerKind: capability.kind,
@@ -169,6 +177,10 @@ try {
     && sel.earlier.includes(p.assetsBlum)
   if (!selectionOk) failures += 1
   console.log(`${selectionOk ? 'PASS' : 'FAIL'}  workspace file   picker=${sel.pickerKind} overridden=${sel.pickerOverridden} opened=${sel.opened} new-session=${JSON.stringify(sel.fresh)} earlier-session=${JSON.stringify(sel.earlier)}`)
+  const title = result.title
+  const titleOk = title.created === 'Blum - BAUM' && title.retitled === 'Blum - BAUM' && title.reused === true
+  if (!titleOk) failures += 1
+  console.log(`${titleOk ? 'PASS' : 'FAIL'}  workspace title  created=${title.created} retitled=${title.retitled} controller-reused=${title.reused}`)
   const skills = result.skills
   // Probe agents mount no preset, so upstream's per-preset skill-filesystem lists nothing here.
   const skillsOk = JSON.stringify(skills.scope) === '["smoke-repo-skill@lh-workspace-repos"]'
