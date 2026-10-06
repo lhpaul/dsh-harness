@@ -1,6 +1,6 @@
 # dsh-harness
 
-LH's adaptation of the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) to the `~/Git/<scope>/*.code-workspace` model, without forking it. Phase 1 gives each DSH session extra writable roots: the folders its scope's workspace files list outside `~/Git/<scope>/`.
+LH's adaptation of the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) to the `~/Git/<scope>/*.code-workspace` model, without forking it. Each DSH session gets extra writable roots, the folders its scope's workspace files list outside `~/Git/<scope>/` (phase 1), and `@` file completion across all of them (phase 2).
 
 Strategy, decisions and verified traps live in the vault note `~/Git/Cerebro/LH/20 - Proyectos/Infra-Harness-DSH.md`. The upstream reference clone `~/Git/DevStack/deepseek-harness` is read-only.
 
@@ -12,6 +12,7 @@ Strategy, decisions and verified traps live in the vault note `~/Git/Cerebro/LH/
 | Multi-root patch | `patch/dsh-multi-root.mjs` | Three exact-anchor hunks on the installed runtime (below). All-or-nothing, idempotent, `--check` / `--revert`. |
 | Patch verify | `patch/dsh-multi-root-verify.mjs` | Loads the real installed modules and checks bash (Seatbelt) and fs writes against a temp policy. |
 | Policy plugin | `packages/workspace-roots/` (`dsh-lh-workspace-roots`) | Cordis plugin that provides `ctx.sandboxPolicy` in place of `@deepseek-ai/dsh-sandbox-policy`. |
+| `@` completion plugin | `dsh-lh-workspace-roots/file-references` (same package) | Provides `ctx.fileReferences` in place of `@deepseek-ai/dsh-file-reference-local`, across all roots. |
 | Launcher | `bin/dsh`, `bin/dsh-node` | Runs the pinned runtime under a Node that satisfies `^22.19 \|\| >=24`. `~/.local/bin/dsh` symlinks here. |
 | Bootstrap | `bootstrap.sh` | install → patch → wire profile → launcher → verify. Idempotent; `--revert` undoes it. |
 
@@ -23,6 +24,21 @@ Strategy, decisions and verified traps live in the vault note `~/Git/Cerebro/LH/
 - A malformed file, or one without a `folders` array, logs a warning and contributes nothing; the session keeps running.
 - Roots that are `/`, `$HOME` or an ancestor of it, or that contain `~/Git`, are refused with a warning.
 - The policy context in the system prompt names the extra roots and the denied paths; without extra roots it is identical to upstream's text.
+
+### `@` completion across roots
+
+`MultiRootFileReferenceService` subclasses upstream `LocalFileReferenceService`, so the config schema (`maxResults`, `maxEntries`, `excludedDirectories`), the `context:file-reference` system-prompt section and the lifecycle stay upstream's. Only `list()` changes; it takes the roots from `ctx.sandboxPolicy.resolve()` on every query, so it follows workspace edits like the sandbox does.
+
+| Query | Result |
+|---|---|
+| empty (`@`) | The extra roots as absolute directories, then the cwd listing (relative, as upstream). |
+| relative path (`@src/`, `@src/ma`) | The cwd only, exactly as upstream. |
+| absolute or `~/` (`@~/Documents/LH/Neg`) | Descends into the root that contains it, or offers the roots whose path starts with it. |
+| bare fuzzy (`@contrato`) | Every root's index ranked together with upstream's scoring; extra roots also match by basename. |
+
+Extra-root candidates are absolute paths, because the fs tools resolve relative paths from the cwd and do not expand `~`. Reads are not fenced, so the model can `read` them. Candidates at or under `deniedWritePaths` are never returned, including when the vault is the session cwd. The per-root index still walks the directory names in those paths, in memory only.
+
+Known quirk: after drilling into an absolute directory in the Web composer, the breadcrumb header treats the path as relative to the cwd (`@Users/…`), so clicking a crumb finds nothing. Typing or picking candidates works. That header belongs to the Web client (phase 4).
 
 ### The runtime patch
 
@@ -38,9 +54,9 @@ The plugin refuses to start on an unpatched runtime with "the DSH runtime is not
 
 ### Profile wiring
 
-`dsh plugin --profile web add packages/workspace-roots` links the package into `~/.dsh/profiles/web` and adds it to `dsh.profile.bundles`. Its `cordis.patch.yml` disables the dsh-base `sandbox-policy` row and inserts its own row. A patch cannot rename a row: the Loader logs `name mismatch … skipping`.
+`dsh plugin --profile web add packages/workspace-roots` links the package into `~/.dsh/profiles/web` and adds it to `dsh.profile.bundles`. Its `cordis.patch.yml` disables the dsh-base `sandbox-policy` row and the dsh-web-app `file-reference-local` row, and inserts its own two rows. A patch cannot rename a row: the Loader logs `name mismatch … skipping`.
 
-The home layer `~/.dsh/cordis.patch.yml` must not contain a `sandbox-policy` row: it would re-enable or replace the upstream service after the bundle layer. Bootstrap refuses to run if it finds one.
+The home layer `~/.dsh/cordis.patch.yml` must not contain a `sandbox-policy` or `file-reference-local` row: it would re-enable or replace the upstream service after the bundle layer. Bootstrap refuses to run if it finds one, and its verify step fails on any `patch:` warning in the composed config.
 
 ## Privacy: Diarios
 
@@ -69,7 +85,7 @@ Bootstrap never touches `~/.dsh/sessions`, `~/.dsh/storages` or credentials. Tes
 
 1. Stop `dsh web`.
 2. Bump `@deepseek-ai/dsh` in `package.json` to the exact new version and check out the matching tag in `~/Git/DevStack/deepseek-harness`.
-3. Bump the `0.2.0-rc.2` peer pins in `packages/workspace-roots/package.json`.
+3. Bump the `0.2.0-rc.2` peer pins in `packages/workspace-roots/package.json`, then diff upstream `dsh-file-reference-local` against `src/file-references.js`: the `LocalFileReferenceService` constructor and `list()` signature, the `WorkspaceFileSearch` exports, and `scoreCandidate` in `search.ts`, which `file-references.js` mirrors.
 4. Run `./bootstrap.sh`. It runs `npm ci` and applies the patch. If an anchor moved, the patch fails loudly and changes nothing.
 5. If the patch fails, read the new `writableRoots`, `seatbeltProfileArgs` and `checkedTarget` in the reference clone, update `HUNKS` in `patch/dsh-multi-root.mjs`, and re-run. Also diff upstream `dsh-sandbox-policy` (config, `sandboxMode` projection, policy context text) against `packages/workspace-roots/src/index.js`.
 6. Bootstrap's verify step must pass: composed config, patch verify, boot smoke, tests. If it does not, revert the pin and run `npm ci && ./bootstrap.sh`.
@@ -77,6 +93,6 @@ Bootstrap never touches `~/.dsh/sessions`, `~/.dsh/storages` or credentials. Tes
 
 ## Next phases
 
-- **Phase 2:** `@` file references and search across all roots.
+- **Phase 2 (done):** `@` file completion across all roots.
 - **Phase 3:** a tool to add a root at runtime with user approval, recorded as a `sandbox/roots` session event (model-visible ⟺ logged).
 - **Phase 4:** optional multi-root file tree in the Web UI; publish the plugin under the `dsh-plugin` topic and follow upstream #5505.

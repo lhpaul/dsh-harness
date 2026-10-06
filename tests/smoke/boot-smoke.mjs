@@ -4,7 +4,8 @@
  * dsh-lh-workspace-roots bundle in an ISOLATED setup — a temp DSH_HOME and a
  * temp HOME holding a fixture ~/Git (Blum, Leasity, vault with Diarios) — plus
  * a probe plugin (via --patch) that resolves policies for fixture sessions and
- * writes through the app's own ctx.sandbox (Seatbelt) and ctx.fs (fs fence).
+ * writes through the app's own ctx.sandbox (Seatbelt) and ctx.fs (fs fence),
+ * then queries ctx.fileReferences (`@` completion) across roots.
  * Never touches ~/.dsh or the real ~/Git.
  *
  * Usage: node tests/smoke/boot-smoke.mjs   (exit 0 pass, 1 fail)
@@ -27,7 +28,7 @@ import { spawnSync } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 export const name = 'lh-smoke-probe'
-export const inject = ['sandboxPolicy', 'sandbox', 'fs']
+export const inject = ['sandboxPolicy', 'sandbox', 'fs', 'fileReferences']
 export function apply(ctx, config) {
   const cases = config.cases
   const run = async () => {
@@ -43,6 +44,13 @@ export function apply(ctx, config) {
       catch (e) { fs = e.code === 'FS_SANDBOX_DENIED' ? false : String(e) }
       result.cases.push({ ...c, bash, fs, workspaceRoots: policy.workspaceRoots ?? [] })
     }
+    const blum = { session: { id: 'refs', header: { cwd: config.refs.cwd } } }
+    const signal = new AbortController().signal
+    result.refs = {
+      provider: ctx.fileReferences.constructor.name,
+      asset: await ctx.fileReferences.list(blum, 'smoke-blum-assets', signal),
+      diarios: await ctx.fileReferences.list(blum, 'secret-entry', signal),
+    }
     writeFileSync(config.out, JSON.stringify(result, null, 2))
   }
   run().catch((e) => writeFileSync(config.out, JSON.stringify({ error: String(e && e.stack || e) })))
@@ -56,8 +64,9 @@ const cases = [
   { id: 'leasity-assets', cwd: p.leasityRepo, dir: p.assetsLeasity, expect: true },
   { id: 'leasity-blum', cwd: p.leasityRepo, dir: p.assetsBlum, expect: false },
 ]
+writeFileSync(join(p.diarios, 'secret-entry.md'), 'x')
 writeFileSync(join(base, 'probe.mjs'), probe)
-writeFileSync(join(base, 'probe.patch.yml'), `- insert:\n    - id: lh-smoke-probe\n      name: ./probe.mjs\n      config: ${JSON.stringify({ out, cases })}\n`)
+writeFileSync(join(base, 'probe.patch.yml'), `- insert:\n    - id: lh-smoke-probe\n      name: ./probe.mjs\n      config: ${JSON.stringify({ out, cases, refs: { cwd: p.blum } })}\n`)
 
 let child
 let code = 1
@@ -88,6 +97,13 @@ try {
     if (!ok) failures += 1
     console.log(`${ok ? 'PASS' : 'FAIL'}  ${c.id.padEnd(16)} expect=${c.expect ? 'ALLOW' : 'DENY '} bash=${c.bash} fs=${c.fs}`)
   }
+  const refs = result.refs
+  const assetPaths = refs.asset.map((c) => c.path)
+  const refsOk = refs.provider === 'MultiRootFileReferenceService'
+    && assetPaths.includes(join(p.assetsBlum, 'smoke-blum-assets.bash'))
+    && refs.diarios.length === 0
+  if (!refsOk) failures += 1
+  console.log(`${refsOk ? 'PASS' : 'FAIL'}  @ completion     provider=${refs.provider} extra-root=${JSON.stringify(assetPaths)} diarios=${JSON.stringify(refs.diarios)}`)
   child.kill('SIGTERM')
   await Promise.race([exited, sleep(10_000)])
   code = failures === 0 ? 0 : 1

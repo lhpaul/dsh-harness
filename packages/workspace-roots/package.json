@@ -1,12 +1,13 @@
 {
   "name": "dsh-lh-workspace-roots",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "DSH sandbox-policy replacement: per-session extra writable roots from ~/Git/<scope>/*.code-workspace, plus denied write paths",
+  "description": "DSH sandbox-policy and file-reference replacements: per-session extra writable roots from ~/Git/<scope>/*.code-workspace, denied write paths, and multi-root @ completion",
   "type": "module",
   "main": "src/index.js",
   "exports": {
     ".": "./src/index.js",
+    "./file-references": "./src/file-references.js",
     "./package.json": "./package.json"
   },
   "files": [
@@ -21,10 +22,11 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.4",
-    "@deepseek-ai/schemastery": "*",
+    "@deepseek-ai/dsh-file-reference-local": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-fs-sandbox": "0.2.0-rc.2",
     "@deepseek-ai/dsh-sandbox": "0.2.0-rc.2",
     "@deepseek-ai/dsh-sandbox-local": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-fs-sandbox": "0.2.0-rc.2",
+    "@deepseek-ai/schemastery": "*",
     "zod": "^4.4.3"
   }
 }

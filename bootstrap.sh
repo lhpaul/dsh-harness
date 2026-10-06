@@ -69,10 +69,13 @@ check_node() {
 
 home_patch_conflict() {
   local f="$DSH_HOME/cordis.patch.yml"
-  if [ -f "$f" ] && grep -Eq '^[[:space:]-]*id:[[:space:]]*sandbox-policy[[:space:]]*$' "$f"; then
-    die "$f has a sandbox-policy row; the home layer outranks the bundle and would hide the plugin.
-    Back it up and remove that row (see README, 'Home patch layer')."
-  fi
+  local row
+  for row in sandbox-policy file-reference-local; do
+    if [ -f "$f" ] && grep -Eq "^[[:space:]-]*id:[[:space:]]*$row[[:space:]]*\$" "$f"; then
+      die "$f has a $row row; the home layer outranks the bundle and would hide the plugin.
+    Back it up and remove that row (see README, 'Profile wiring')."
+    fi
+  done
 }
 
 apply() {
@@ -119,9 +122,16 @@ apply() {
   fi
 
   say "5/5 verify"
-  "$DSH" --profile "$PROFILE" --dump-config 2>/dev/null | grep -q "name: $PKG_NAME" \
-    || die "composed config of profile $PROFILE does not load $PKG_NAME"
-  echo "    composed config loads $PKG_NAME"
+  local dump
+  dump=$("$DSH" --profile "$PROFILE" --dump-config 2>&1)
+  for row in "$PKG_NAME" "$PKG_NAME/file-references"; do
+    grep -qx "  name: $row" <<<"$dump" || die "composed config of profile $PROFILE does not load $row"
+  done
+  if grep -q "patch:" <<<"$dump"; then
+    grep "patch:" <<<"$dump" >&2
+    die "the composed config reports patch warnings"
+  fi
+  echo "    composed config loads $PKG_NAME and $PKG_NAME/file-references"
   if [ "$(uname -s)" = Darwin ]; then
     node patch/dsh-multi-root-verify.mjs
     node tests/smoke/boot-smoke.mjs || die "boot smoke failed"
