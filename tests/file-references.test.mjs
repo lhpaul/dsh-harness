@@ -91,6 +91,24 @@ describe('MultiRootFileReferenceService', () => {
     assert.deepEqual(paths(await list(blum, tilde.slice(0, -2))), [p.assetsBlum])
   })
 
+  test('Web breadcrumb queries inside an absolute root are read as absolute', async () => {
+    const blum = agent('blum', p.blum)
+    const crumb = (path) => `${path.slice(1)}/`
+    assert.deepEqual(
+      paths(await list(blum, crumb(join(p.vault, '45 - Autoconocimiento')))),
+      paths(await list(blum, `${join(p.vault, '45 - Autoconocimiento')}/`)),
+    )
+    assert.ok(paths(await list(blum, crumb(join(p.vault, '45 - Autoconocimiento')))).includes(p.principios))
+    const above = paths(await list(blum, crumb(p.home)))
+    assert.ok(above.includes(p.vault) && above.includes(p.assetsBlum), JSON.stringify(above))
+    assert.deepEqual(await list(blum, crumb(p.assetsLeasity)), [])
+  })
+
+  test('a relative query naming a cwd directory stays relative', async () => {
+    writeFileSync(join(p.blumRepo, 'notes.md'), 'x')
+    assert.deepEqual(paths(await list(agent('docs', p.blum), 'docs/')), ['docs/notes.md'])
+  })
+
   test('absolute queries outside every root find nothing', async () => {
     assert.deepEqual(await list(agent('blum', p.blum), `${p.assetsLeasity}/`), [])
     assert.deepEqual(await list(agent('blum', p.blum), `${p.outside}/`), [])

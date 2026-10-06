@@ -1,8 +1,9 @@
 # Bundle layer of dsh-lh-workspace-roots: replaces the providers of
-# ctx.sandboxPolicy and ctx.fileReferences. The Loader refuses to change a
-# row's `name` through a patch ("name mismatch ... skipping"), so each upstream
-# row is disabled and this package is inserted as its own row. mode/workspaceRoot
-# restate the dsh-base values.
+# ctx.sandboxPolicy and ctx.fileReferences, and extends ctx.workspaceFiles in
+# place. The Loader refuses to change a row's `name` through a patch ("name
+# mismatch ... skipping"), so each replaced upstream row is disabled and this
+# package is inserted as its own row. mode/workspaceRoot restate the dsh-base
+# values.
 - id: sandbox-policy
   disabled: true
 
@@ -21,3 +22,8 @@
 
     - id: file-reference-workspace-roots
       name: dsh-lh-workspace-roots/file-references
+
+    # Keeps the upstream workspace-files row (its host service, typert
+    # descriptors and browser file previews) and overrides two methods on it.
+    - id: workspace-files-workspace-roots
+      name: dsh-lh-workspace-roots/workspace-files

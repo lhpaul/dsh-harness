@@ -1,6 +1,6 @@
 # dsh-harness
 
-LH's adaptation of the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) to the `~/Git/<scope>/*.code-workspace` model, without forking it. Each DSH session gets extra writable roots: the folders its scope's workspace files list outside `~/Git/<scope>/` (phase 1). It gets `@` file completion across all of them (phase 2). The agent can also ask the user to approve one more writable directory for the rest of the session (phase 3).
+LH's adaptation of the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) to the `~/Git/<scope>/*.code-workspace` model, without forking it. Each DSH session gets extra writable roots: the folders its scope's workspace files list outside `~/Git/<scope>/` (phase 1). It gets `@` file completion across all of them (phase 2). The agent can also ask the user to approve one more writable directory for the rest of the session (phase 3). The Web UI gets a Roots tab that browses every root (phase 4).
 
 Strategy, decisions and verified traps live in the vault note `~/Git/Cerebro/LH/20 - Proyectos/Infra-Harness-DSH.md`. The upstream reference clone `~/Git/DevStack/deepseek-harness` is read-only.
 
@@ -14,6 +14,8 @@ Strategy, decisions and verified traps live in the vault note `~/Git/Cerebro/LH/
 | Policy plugin | `packages/workspace-roots/` (`dsh-lh-workspace-roots`) | Cordis plugin that provides `ctx.sandboxPolicy` in place of `@deepseek-ai/dsh-sandbox-policy`. |
 | `@` completion plugin | `dsh-lh-workspace-roots/file-references` (same package) | Provides `ctx.fileReferences` in place of `@deepseek-ai/dsh-file-reference-local`, across all roots. |
 | Root grants | `src/root-grants.js` (registered by the policy plugin) | The `add_workspace_root` tool and the `workspaceRootGrants` session projection. |
+| Directory listings | `dsh-lh-workspace-roots/workspace-files` (same package) | Lets upstream `ctx.workspaceFiles` list and watch directories inside the extra roots. |
+| Web Roots tab | `src/client.js` (the package's `./client` bundle) | Right-sidebar tab with one file tree per root. |
 | Launcher | `bin/dsh`, `bin/dsh-node` | Runs the pinned runtime under a Node that satisfies `^22.19 \|\| >=24`. `~/.local/bin/dsh` symlinks here. |
 | Bootstrap | `bootstrap.sh` | install → patch → wire profile → launcher → verify. Idempotent; `--revert` undoes it. |
 
@@ -64,7 +66,17 @@ Limits:
 
 Extra-root candidates are absolute paths, because the fs tools resolve relative paths from the cwd and do not expand `~`. Reads are not fenced, so the model can `read` them. Candidates at or under `deniedWritePaths` are never returned, including when the vault is the session cwd. The per-root index still walks the directory names in those paths, in memory only.
 
-Known quirk: after drilling into an absolute directory in the Web composer, the breadcrumb header treats the path as relative to the cwd (`@Users/…`), so clicking a crumb finds nothing. Typing or picking candidates works. That header belongs to the Web client (phase 4).
+After drilling into an absolute directory, the Web composer's breadcrumb header sends the path without its leading slash (`Users/…/`). `list()` reads such a query as absolute when its first segment is not a cwd entry and the absolute path lies inside, or leads to, an extra root; otherwise it stays relative.
+
+### Web Roots tab
+
+The package ships a browser bundle (`./client`, `dsh.client.platform: web`), which DSH serves because the package's own row is active. It registers a right-sidebar tab type, "Workspace roots", in the new-tab guide. The tab shows the session folder first, then every extra root (workspace-file roots and grants, read from the `@` empty-query candidates) as a lazily expanded tree. Clicking a file opens upstream's file preview tab.
+
+Listings go through upstream `ctx.workspaceFiles`, which only lists inside the session cwd. The `/workspace-files` plugin installs `list` and `changes` as own properties of the live upstream instance; for an absolute path inside an extra root they pass that root as the confinement root, then call upstream's methods. The API Gateway calls Remote methods by name on the instance, so its strict typert descriptors stay upstream's. Do not disable the upstream `workspace-files` row instead: the same package carries the browser `file` resource provider, and every file preview would show "The file resource service is unavailable".
+
+Denied write paths (Diarios) are listed like any other directory. The trees are the user's own view and never reach a model; read privacy still rests on the vault rules.
+
+Limits: the tab does not watch directories (use its reload button), and it collapses again when the sidebar remounts it.
 
 ### The runtime patch
 
@@ -80,7 +92,7 @@ The plugin refuses to start on an unpatched runtime with "the DSH runtime is not
 
 ### Profile wiring
 
-`dsh plugin --profile web add packages/workspace-roots` links the package into `~/.dsh/profiles/web` and adds it to `dsh.profile.bundles`. Its `cordis.patch.yml` disables the dsh-base `sandbox-policy` row and the dsh-web-app `file-reference-local` row, and inserts its own two rows. A patch cannot rename a row: the Loader logs `name mismatch … skipping`.
+`dsh plugin --profile web add packages/workspace-roots` links the package into `~/.dsh/profiles/web` and adds it to `dsh.profile.bundles`. Its `cordis.patch.yml` disables the dsh-base `sandbox-policy` row and the dsh-web-app `file-reference-local` row, and inserts its own rows: the two replacements and `dsh-lh-workspace-roots/workspace-files`. A patch cannot rename a row: the Loader logs `name mismatch … skipping`.
 
 The home layer `~/.dsh/cordis.patch.yml` must not contain a `sandbox-policy` or `file-reference-local` row: it would re-enable or replace the upstream service after the bundle layer. Bootstrap refuses to run if it finds one, and its verify step fails on any `patch:` warning in the composed config.
 
@@ -111,7 +123,7 @@ Bootstrap never touches `~/.dsh/sessions`, `~/.dsh/storages` or credentials. Tes
 
 1. Stop `dsh web`.
 2. Bump `@deepseek-ai/dsh` in `package.json` to the exact new version and check out the matching tag in `~/Git/DevStack/deepseek-harness`.
-3. Bump the `0.2.0-rc.2` peer pins in `packages/workspace-roots/package.json`, then diff upstream `dsh-file-reference-local` against `src/file-references.js`: the `LocalFileReferenceService` constructor and `list()` signature, the `WorkspaceFileSearch` exports, and `scoreCandidate` in `search.ts`, which `file-references.js` mirrors. For root grants, re-check the `tool/call` and `tool/result` data fields (`name`, `callId`, `message.source.callId`, `meta`, `surfaceOp`), the approval outcome vocabulary, and the `ToolExecution.parent` semantics that `root-grants.js` relies on.
+3. Bump the `0.2.0-rc.2` peer pins in `packages/workspace-roots/package.json`, then diff upstream `dsh-file-reference-local` against `src/file-references.js`: the `LocalFileReferenceService` constructor and `list()` signature, the `WorkspaceFileSearch` exports, and `scoreCandidate` in `search.ts`, which `file-references.js` mirrors. For root grants, re-check the `tool/call` and `tool/result` data fields (`name`, `callId`, `message.source.callId`, `meta`, `surfaceOp`), the approval outcome vocabulary, and the `ToolExecution.parent` semantics that `root-grants.js` relies on. For the Roots tab, re-check the `WorkspaceFiles` `list`/`changes` signatures and scope fields, the gateway's by-name method dispatch, the `sidebarRightTabs` and `sidebar.right.pane.tab` slot APIs, and the client-ui-primitives exports `client.js` requires.
 4. Run `./bootstrap.sh`. It runs `npm ci` and applies the patch. If an anchor moved, the patch fails loudly and changes nothing.
 5. If the patch fails, read the new `writableRoots`, `seatbeltProfileArgs` and `checkedTarget` in the reference clone, update `HUNKS` in `patch/dsh-multi-root.mjs`, and re-run. Also diff upstream `dsh-sandbox-policy` (config, `sandboxMode` projection, policy context text) against `packages/workspace-roots/src/index.js`.
 6. Bootstrap's verify step must pass: composed config, patch verify, boot smoke, tests. If it does not, revert the pin and run `npm ci && ./bootstrap.sh`.
@@ -121,4 +133,4 @@ Bootstrap never touches `~/.dsh/sessions`, `~/.dsh/storages` or credentials. Tes
 
 - **Phase 2 (done):** `@` file completion across all roots.
 - **Phase 3 (done):** `add_workspace_root`, user-approved session grants recorded in known event types (see "Session grants").
-- **Phase 4:** optional multi-root file tree in the Web UI; publish the plugin under the `dsh-plugin` topic and follow upstream #5505.
+- **Phase 4 (done):** the Web Roots tab and the composer breadcrumb fix. Pending: publish the plugin under the `dsh-plugin` topic and follow upstream #5505.

@@ -12,13 +12,17 @@
  *     extra roots as directory candidates;
  *   - absolute or `~/` queries descend into whichever root contains them, or
  *     offer the roots whose path starts with the query;
- *   - bare fuzzy queries (`foo`) rank every root's index together.
+ *   - bare fuzzy queries (`foo`) rank every root's index together;
+ *   - a relative query that only makes sense absolute (a Web breadcrumb
+ *     inside an extra root) is read as absolute; see `crumbQuery`.
  *
  * Extra-root candidates are absolute paths: the fs tools resolve relative
  * paths from the cwd and do not expand `~`. Candidates at or under
- * `policy.deniedWritePaths` are never offered.
+ * `policy.deniedWritePaths` are never offered. The Web Roots tab reads the
+ * session's extra roots from the empty query's absolute directory candidates.
  */
 
+import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -83,6 +87,7 @@ export class MultiRootFileReferenceService extends LocalFileReferenceService {
 
     let query = rawQuery.replaceAll('\\', '/')
     if (query === '~' || query.startsWith('~/')) query = homedir() + query.slice(1)
+    query = crumbQuery(query, primary, [primary, ...extras])
 
     if (query.startsWith('/')) {
       const owner = [primary, ...extras]
@@ -155,6 +160,20 @@ export class MultiRootFileReferenceService extends LocalFileReferenceService {
     for (const search of this.rootSearches.get(agent)?.values() ?? []) search.dispose()
     this.rootSearches.delete(agent)
   }
+}
+
+/**
+ * The Web `@` breadcrumb rebuilds a drilled directory's trail as cwd-relative
+ * mentions, so a crumb inside an absolute extra root arrives without its
+ * leading `/` (`Users/me/Git/`). Read such a query as absolute when its first
+ * segment does not exist under the cwd and the absolute spelling lies inside,
+ * or above, one of the roots.
+ */
+function crumbQuery(query, primary, roots) {
+  if (query.startsWith('/') || !query.includes('/')) return query
+  if (existsSync(join(primary, query.slice(0, query.indexOf('/'))))) return query
+  const absolute = `/${query}`
+  return roots.some((root) => absolute.startsWith(`${root}/`) || root.startsWith(absolute)) ? absolute : query
 }
 
 function trimSlash(path) {

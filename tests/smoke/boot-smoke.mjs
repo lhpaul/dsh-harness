@@ -30,7 +30,7 @@ import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 export const name = 'lh-smoke-probe'
-export const inject = ['sandboxPolicy', 'sandbox', 'fs', 'fileReferences', 'agents', 'sessionProjections', 'tools']
+export const inject = ['sandboxPolicy', 'sandbox', 'fs', 'fileReferences', 'agents', 'sessionProjections', 'tools', 'workspaceFiles', 'typertGateway', 'clientModules']
 export function apply(ctx, config) {
   const cases = config.cases
   const run = async () => {
@@ -62,6 +62,17 @@ export function apply(ctx, config) {
       asset: await ctx.fileReferences.list(blum, 'smoke-blum-assets', signal),
       diarios: await ctx.fileReferences.list(blum, 'secret-entry', signal),
     }
+    const listVia = (path) => ctx.typertGateway
+      .invoke({ namespace: 'workspaceFiles', method: 'list', args: { workspaceFileScopeId: blum.session.id, path } })
+      .then((listing) => listing.entries.map((entry) => entry.name), (e) => 'error:' + (e.code ?? e.message))
+    const original = ctx.workspaceFiles[Symbol.for('cordis.original')] ?? ctx.workspaceFiles
+    result.files = {
+      provider: ctx.workspaceFiles.constructor.name,
+      anchored: Object.hasOwn(original, 'list') && Object.hasOwn(original, 'changes'),
+      extraRoot: await listVia(config.files.extraRoot),
+      outside: await listVia(config.files.outside),
+      clientBundles: ['dsh-lh-workspace-roots', '@deepseek-ai/dsh-api-workspace-files'].filter((id) => ctx.clientModules.table.has(id)),
+    }
     for (const handle of handles.values()) await handle.dispose()
     writeFileSync(config.out, JSON.stringify(result, null, 2))
   }
@@ -78,7 +89,7 @@ const cases = [
 ]
 writeFileSync(join(p.diarios, 'secret-entry.md'), 'x')
 writeFileSync(join(base, 'probe.mjs'), probe)
-writeFileSync(join(base, 'probe.patch.yml'), `- insert:\n    - id: lh-smoke-probe\n      name: ./probe.mjs\n      config: ${JSON.stringify({ out, cases, refs: { cwd: p.blum } })}\n`)
+writeFileSync(join(base, 'probe.patch.yml'), `- insert:\n    - id: lh-smoke-probe\n      name: ./probe.mjs\n      config: ${JSON.stringify({ out, cases, refs: { cwd: p.blum }, files: { extraRoot: p.assetsBlum, outside: p.outside } })}\n`)
 
 let child
 let code = 1
@@ -120,6 +131,16 @@ try {
     && JSON.stringify(result.grants.state) === JSON.stringify({ pending: [], roots: [] })
   if (!grantsOk) failures += 1
   console.log(`${grantsOk ? 'PASS' : 'FAIL'}  root grants      add_workspace_root registered=${result.grants.tool} projection=${JSON.stringify(result.grants.state)}`)
+  const files = result.files
+  const loaderErrors = log.split('\n').filter((line) => /typert-loader:|client-modules:/.test(line))
+  const filesOk = files.provider === 'WorkspaceFiles'
+    && files.anchored === true
+    && Array.isArray(files.extraRoot) && files.extraRoot.includes('smoke-blum-assets.bash')
+    && files.outside === 'error:workspace-file/outside-workspace'
+    && files.clientBundles.length === 2
+    && loaderErrors.length === 0
+  if (!filesOk) failures += 1
+  console.log(`${filesOk ? 'PASS' : 'FAIL'}  web file tree    provider=${files.provider} anchored=${files.anchored} extra-root=${JSON.stringify(files.extraRoot)} outside=${files.outside} client-bundles=${JSON.stringify(files.clientBundles)}${loaderErrors.length ? ` errors=${JSON.stringify(loaderErrors)}` : ''}`)
   child.kill('SIGTERM')
   await Promise.race([exited, sleep(10_000)])
   code = failures === 0 ? 0 : 1

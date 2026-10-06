@@ -47,6 +47,7 @@ const { LocalSandboxProvider } = await load('dsh-sandbox-local')
 const { SandboxedFileSystem } = await load('dsh-fs-sandbox')
 
 const base = realpathSync(mkdtempSync(join(homedir(), '.dsh-harness-verify-')))
+process.on('exit', () => rmSync(base, { recursive: true, force: true }))
 const dirs = {
   project: join(base, 'project'),
   second: join(base, 'second'),
@@ -112,7 +113,6 @@ for (const [label, expected, viaBash, viaFs] of cases) {
 }
 
 ctx.registry.delete?.(LocalSandboxProvider)
-rmSync(base, { recursive: true, force: true })
 
 console.log()
 if (failures === 0) {
