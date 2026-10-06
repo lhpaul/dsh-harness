@@ -1,0 +1,20 @@
+{
+  "name": "dsh-harness",
+  "private": true,
+  "description": "LH's bundle, plugin and multi-root patch for the DeepSeek Harness (DSH)",
+  "type": "module",
+  "scripts": {
+    "test": "node --test --test-concurrency=1 \"tests/**/*.test.mjs\"",
+    "patch": "node patch/dsh-multi-root.mjs",
+    "patch:check": "node patch/dsh-multi-root.mjs --check",
+    "patch:revert": "node patch/dsh-multi-root.mjs --revert",
+    "verify": "node patch/dsh-multi-root-verify.mjs",
+    "smoke": "node tests/smoke/boot-smoke.mjs"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.2.0-rc.2"
+  },
+  "engines": {
+    "node": "^22.19 || >=24"
+  }
+}

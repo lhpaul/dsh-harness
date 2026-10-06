@@ -1,0 +1,13 @@
+#!/bin/sh
+# Print the path of a Node binary that satisfies DSH's engines (^22.19 || >=24).
+# The dsh CLI starts only when `import.meta.main` exists; older Node exits 0
+# silently. Order: $DSH_NODE, `node` on PATH, Homebrew, /usr/local.
+for candidate in "${DSH_NODE:-}" "$(command -v node 2>/dev/null)" /opt/homebrew/bin/node /usr/local/bin/node; do
+  [ -n "$candidate" ] && [ -x "$candidate" ] || continue
+  if "$candidate" -e "const [a,b]=process.versions.node.split('.').map(Number);process.exit(a>=24||(a===22&&b>=19)?0:1)" 2>/dev/null; then
+    echo "$candidate"
+    exit 0
+  fi
+done
+echo "dsh-node: no Node satisfying ^22.19 || >=24 found; set DSH_NODE" >&2
+exit 1

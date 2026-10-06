@@ -1,0 +1,17 @@
+# Bundle layer of dsh-lh-workspace-roots: replaces the provider of
+# ctx.sandboxPolicy. The Loader refuses to change a row's `name` through a
+# patch ("name mismatch ... skipping"), so the dsh-base `sandbox-policy` row is
+# disabled and this package is inserted as its own row. mode/workspaceRoot
+# restate the dsh-base values.
+- id: sandbox-policy
+  disabled: true
+
+- insert:
+    - id: sandbox-policy-workspace-roots
+      name: dsh-lh-workspace-roots
+      config:
+        mode: !!js process.env.DSH_PERMISSION_MODE ?? 'workspace-write'
+        workspaceRoot: !!js process.cwd()
+        scopesRoot: !!js process.env.HOME + '/Git'
+        deniedWritePaths:
+          - !!js process.env.HOME + '/Git/Cerebro/LH/45 - Autoconocimiento/Diarios'

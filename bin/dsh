@@ -1,0 +1,15 @@
+#!/bin/sh
+# Launch the DSH runtime pinned and patched by this repo (see bootstrap.sh)
+# under a Node that satisfies its engines. Safe to symlink from ~/.local/bin/dsh.
+set -e
+self=$(readlink -f "$0")
+repo=$(cd "$(dirname "$self")/.." && pwd)
+entry="$repo/node_modules/@deepseek-ai/dsh/lib/bin.js"
+if [ ! -f "$entry" ]; then
+  echo "dsh: pinned runtime missing; run $repo/bootstrap.sh" >&2
+  exit 1
+fi
+node=$("$repo/bin/dsh-node")
+PATH="$(dirname "$node"):$PATH"
+export PATH
+exec "$node" "$entry" "$@"
