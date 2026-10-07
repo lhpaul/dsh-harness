@@ -164,9 +164,9 @@ export function workspaceBrowseList(upstream, maxEntries = 1000, openDirectory =
       }
     } finally {
       const closing = level.close()
-      // Node queues close behind pending reads; cancellation must not wait.
-      if (signal?.aborted) closing.catch(() => {})
-      else await closing
+      // Node queues close behind pending reads; cancellation must not wait,
+      // including when it arrives after EOF while close is already pending.
+      await raceAbort(closing, signal)
     }
     return { ...listing, entries, truncated }
   }

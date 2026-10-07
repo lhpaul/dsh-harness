@@ -58,7 +58,7 @@ function deferred() {
   return { promise, resolve, reject }
 }
 
-for (const step of ['open', 'read']) {
+for (const step of ['open', 'read', 'close']) {
   test(`browse aborts a stalled ${step} promptly and closes the abandoned handle`, async () => {
     const [base, cleanup] = tempHomeDir()
     const started = deferred()
@@ -67,8 +67,17 @@ for (const step of ['open', 'read']) {
     const closed = deferred()
     let closeCalls = 0
     const level = {
-      read() { started.resolve(); return stalled.promise },
-      close() { closeCalls++; closed.resolve(); return closing.promise },
+      read() {
+        if (step === 'close') return Promise.resolve(null)
+        started.resolve()
+        return stalled.promise
+      },
+      close() {
+        closeCalls++
+        if (step === 'close') started.resolve()
+        closed.resolve()
+        return closing.promise
+      },
     }
     const upstream = async () => ({ path: base, crumbs: [], entries: [], truncated: false })
     const open = () => {
