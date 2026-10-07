@@ -95,7 +95,7 @@ export function workspacePick(choose, policy, onWorkspaceFile = async () => {}, 
     const directory = await policy.openPicked(picked)
     if (picked.endsWith(WORKSPACE_SUFFIX)) {
       try {
-        await onWorkspaceFile(directory, picked)
+        if ((await raceAbort(stat(picked), signal)).isFile()) await onWorkspaceFile(directory, picked)
       } catch (error) {
         onError(error)
       }
@@ -145,6 +145,7 @@ export function workspaceBrowseList(upstream, maxEntries = 1000, openDirectory =
     const entries = [...listing.entries]
     let truncated = listing.truncated
     signal?.throwIfAborted()
+    if (entries.length >= maxEntries) return { ...listing, truncated: true }
     const opening = openDirectory(listing.path)
     const level = await raceAbort(opening, signal).catch((error) => {
       // A cancelled open may still return a handle; close it when it arrives.
@@ -160,7 +161,7 @@ export function workspaceBrowseList(upstream, maxEntries = 1000, openDirectory =
         if (!entry.isFile()) continue
         entries.push({ name: entry.name, path: file, hidden: entry.name.startsWith('.') })
         entries.sort((a, b) => a.name.localeCompare(b.name))
-        if (entries.length > maxEntries) { entries.pop(); truncated = true }
+        if (entries.length >= maxEntries) { truncated = true; break }
       }
     } finally {
       const closing = level.close()

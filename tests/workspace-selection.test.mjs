@@ -164,10 +164,12 @@ describe('workspace-file selection', () => {
     const fakePolicy = { openPicked: async (path) => (path.endsWith('.code-workspace') ? '/scope/repo' : path) }
     const onFile = async (directory, file) => { titled.push([directory, file]); if (file.includes('Broken')) throw new Error('boom') }
     const pick = (path) => workspacePick(async () => path, fakePolicy, onFile, (error) => errors.push(error.message))(new AbortController().signal)
-    assert.equal(await pick('/scope/A.code-workspace'), '/scope/repo')
+    const broken = join(p.blum, 'Broken.code-workspace')
+    writeJson(broken, { folders: [] })
+    assert.equal(await pick(blumFile), '/scope/repo')
     assert.equal(await pick('/scope/other'), '/scope/other')
-    assert.equal(await pick('/scope/Broken.code-workspace'), '/scope/repo')
-    assert.deepEqual(titled, [['/scope/repo', '/scope/A.code-workspace'], ['/scope/repo', '/scope/Broken.code-workspace']])
+    assert.equal(await pick(broken), '/scope/repo')
+    assert.deepEqual(titled, [['/scope/repo', blumFile], ['/scope/repo', broken]])
     assert.deepEqual(errors, ['boom'])
   })
 

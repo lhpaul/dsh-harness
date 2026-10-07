@@ -29,7 +29,11 @@ test('browse lists bounded workspace leaves, preserves folders and cancellation'
   } finally { cleanup() }
 })
 
-test('browse create resolves, titles and reuses workspace, rejects invalid files and restores seams', async () => {
+test('browse create resolves, titles and reuses workspace, rejects invalid files and restores seams', async (t) => {
+  const [base, cleanup] = tempHomeDir()
+  t.after(cleanup)
+  const workspaceFile = join(base, 'Project.code-workspace')
+  writeFileSync(workspaceFile, '{}')
   const calls = []
   const capability = { list: async () => ({}) }
   const list = capability.list
@@ -42,14 +46,50 @@ test('browse create resolves, titles and reuses workspace, rejects invalid files
   const registry = { async resolveByPath() { return undefined },
     async create(path, title) { calls.push([path, title]) } }
   const restore = installWorkspaceBrowse(capability, controller, policy, registry)
-  assert.equal((await controller.create({ path: '/scope/Project.code-workspace' })).path, '/scope/repo')
+  assert.equal((await controller.create({ path: workspaceFile })).path, '/scope/repo')
   assert.deepEqual(calls, [['/scope/repo', 'Project'], '/scope/repo'])
   await controller.create({ path: '/scope' })
   assert.equal(calls.at(-1), '/scope')
-  await assert.rejects(controller.create({ path: '/invalid.code-workspace' }), /invalid scope/)
+  const folder = join(base, 'x.code-workspace')
+  mkdirSync(folder)
+  const normalPolicy = { async openPicked(path) { return path } }
   restore()
+  const restoreFolder = installWorkspaceBrowse(capability, controller, normalPolicy, registry)
+  const before = calls.length
+  assert.equal((await controller.create({ path: folder })).path, folder)
+  assert.deepEqual(calls.slice(before), [folder], 'folder title must not be changed through the registry')
+  restoreFolder()
+  const restoreAgain = installWorkspaceBrowse(capability, controller, policy, registry)
+  await assert.rejects(controller.create({ path: '/invalid.code-workspace' }), /invalid scope/)
+  restoreAgain()
   assert.equal(capability.list, list)
   assert.equal(controller.create, create)
+})
+
+test('browse stops the workspace scan at maxEntries and closes early', async (t) => {
+  const [base, cleanup] = tempHomeDir()
+  t.after(cleanup)
+  const files = Array.from({ length: 5 }, (_, i) => `${i}.code-workspace`)
+  for (const file of files) writeFileSync(join(base, file), '{}')
+  let reads = 0, closes = 0, opens = 0
+  const level = {
+    async read() {
+      reads++
+      assert.ok(reads <= 2, 'must stop before reading the remaining directory entries')
+      return { name: files[reads - 1], isFile: () => true }
+    },
+    async close() { closes++ },
+  }
+  const upstream = async () => ({ path: base, crumbs: [], entries: [], truncated: false })
+  const open = async () => { opens++; return level }
+  const listing = await workspaceBrowseList(upstream, 2, open)(base, new AbortController().signal)
+  assert.equal(listing.entries.length, 2)
+  assert.equal(listing.truncated, true)
+  assert.equal(reads, 2)
+  assert.equal(closes, 1)
+  const full = async () => ({ ...listing, truncated: false })
+  assert.equal((await workspaceBrowseList(full, 2, open)(base)).truncated, true)
+  assert.equal(opens, 1, 'a full upstream listing must not start another scan')
 })
 
 function deferred() {
