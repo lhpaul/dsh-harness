@@ -1,9 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync, symlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { tempHomeDir } from './helpers.mjs'
-import { workspaceBrowseList, installWorkspaceBrowse } from '../packages/workspace-roots/src/directory-picker.js'
+import { workspaceBrowseList, workspacePick, installWorkspaceBrowse } from '../packages/workspace-roots/src/directory-picker.js'
 
 test('browse lists bounded workspace leaves, preserves folders and cancellation', async () => {
   const [base, cleanup] = tempHomeDir()
@@ -13,20 +13,38 @@ test('browse lists bounded workspace leaves, preserves folders and cancellation'
     const file = join(base, 'b.code-workspace')
     writeFileSync(file, '{}')
     writeFileSync(join(base, 'ignore.txt'), '')
-    const upstream = async (path = base) => ({ path, home: base, crumbs: [],
-      entries: [{ name: 'a-folder', path: folder, hidden: false }], truncated: false })
-    const list = workspaceBrowseList(upstream, 2)
+    const list = workspaceBrowseList(2)
     assert.deepEqual((await list(base)).entries.map(e => e.name), ['a-folder', 'b.code-workspace'])
+    assert.equal((await list(base)).truncated, false)
     const leaf = await list(file)
     assert.equal(leaf.path, file)
     assert.deepEqual(leaf.entries, [])
     assert.equal(leaf.crumbs.at(-1).path, file)
-    const bounded = await workspaceBrowseList(upstream, 1)(base)
+    const bounded = await workspaceBrowseList(1)(base)
     assert.equal(bounded.entries.length, 1)
     assert.equal(bounded.truncated, true)
     const abort = AbortSignal.abort(new Error('cancelled'))
     await assert.rejects(list(base, abort), /cancelled/)
   } finally { cleanup() }
+})
+
+test('browse keeps upstream path validation and follows directory symlinks', async (t) => {
+  const [base, cleanup] = tempHomeDir()
+  t.after(cleanup)
+  const target = join(base, 'target')
+  mkdirSync(target)
+  writeFileSync(join(base, 'source.code-workspace'), '{}')
+  symlinkSync(target, join(base, '.linked-folder'))
+  symlinkSync(join(base, 'missing'), join(base, 'broken'))
+  symlinkSync(join(base, 'source.code-workspace'), join(base, 'linked.code-workspace'))
+  const list = workspaceBrowseList()
+  const listing = await list(base)
+  assert.deepEqual(listing.entries.map(entry => entry.name), ['.linked-folder', 'linked.code-workspace', 'source.code-workspace', 'target'])
+  assert.equal(listing.entries[0].hidden, true)
+  assert.equal(listing.truncated, false)
+  assert.deepEqual((await list(join(base, 'linked.code-workspace'))).entries, [])
+  await assert.rejects(list('relative'), /not a fully qualified path/)
+  await assert.rejects(list(join(base, 'missing')), /cannot list/)
 })
 
 test('browse create resolves, titles and reuses workspace, rejects invalid files and restores seams', async (t) => {
@@ -66,30 +84,38 @@ test('browse create resolves, titles and reuses workspace, rejects invalid files
   assert.equal(controller.create, create)
 })
 
-test('browse stops the workspace scan at maxEntries and closes early', async (t) => {
+test('folders and workspace files share the sorted result limit in one scan', async (t) => {
   const [base, cleanup] = tempHomeDir()
   t.after(cleanup)
-  const files = Array.from({ length: 5 }, (_, i) => `${i}.code-workspace`)
-  for (const file of files) writeFileSync(join(base, file), '{}')
+  mkdirSync(join(base, 'b-folder'))
+  mkdirSync(join(base, 'c-folder'))
+  writeFileSync(join(base, 'a.code-workspace'), '{}')
+  const listing = await workspaceBrowseList(2)(base)
+  assert.deepEqual(listing.entries.map(entry => entry.name), ['a.code-workspace', 'b-folder'])
+  assert.equal(listing.truncated, true)
+  assert.equal(listing.path, base)
+  assert.equal(listing.crumbs.at(-1).path, base)
+})
+
+test('browse caps all dirent reads, including ignored regular files, and closes early', async (t) => {
+  const [base, cleanup] = tempHomeDir()
+  t.after(cleanup)
   let reads = 0, closes = 0, opens = 0
   const level = {
     async read() {
       reads++
-      assert.ok(reads <= 2, 'must stop before reading the remaining directory entries')
-      return { name: files[reads - 1], isFile: () => true }
+      assert.ok(reads <= 20, 'must not read beyond 10 * maxEntries')
+      return { name: `${reads}.txt`, isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false }
     },
     async close() { closes++ },
   }
-  const upstream = async () => ({ path: base, crumbs: [], entries: [], truncated: false })
   const open = async () => { opens++; return level }
-  const listing = await workspaceBrowseList(upstream, 2, open)(base, new AbortController().signal)
-  assert.equal(listing.entries.length, 2)
+  const listing = await workspaceBrowseList(2, open)(base, new AbortController().signal)
+  assert.deepEqual(listing.entries, [])
   assert.equal(listing.truncated, true)
-  assert.equal(reads, 2)
+  assert.equal(reads, 20)
   assert.equal(closes, 1)
-  const full = async () => ({ ...listing, truncated: false })
-  assert.equal((await workspaceBrowseList(full, 2, open)(base)).truncated, true)
-  assert.equal(opens, 1, 'a full upstream listing must not start another scan')
+  assert.equal(opens, 1)
 })
 
 function deferred() {
@@ -119,14 +145,13 @@ for (const step of ['open', 'read', 'close']) {
         return closing.promise
       },
     }
-    const upstream = async () => ({ path: base, crumbs: [], entries: [], truncated: false })
     const open = () => {
       if (step === 'open') { started.resolve(); return stalled.promise }
       return Promise.resolve(level)
     }
     const controller = new AbortController()
     const reason = new Error('cancelled stalled scan')
-    const listing = workspaceBrowseList(upstream, 1000, open)(base, controller.signal)
+    const listing = workspaceBrowseList(1000, open)(base, controller.signal)
     let timer
     try {
       await started.promise
@@ -152,3 +177,46 @@ for (const step of ['open', 'read', 'close']) {
     }
   })
 }
+
+test('picker aborts a stalled file stat instead of returning a successful selection', async (t) => {
+  const [base, cleanup] = tempHomeDir()
+  t.after(cleanup)
+  const started = deferred()
+  const stalled = deferred()
+  const controller = new AbortController()
+  const reason = new Error('cancelled file stat')
+  let titled = false, reported = false
+  const pick = workspacePick(async () => join(base, 'a.code-workspace'),
+    { async openPicked() { return base } },
+    async () => { titled = true }, () => { reported = true },
+    () => { started.resolve(); return stalled.promise })
+  const selection = pick(controller.signal)
+  let timer
+  try {
+    await started.promise
+    const rejected = assert.rejects(selection, error => error === reason)
+    controller.abort(reason)
+    await Promise.race([rejected, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('stat cancellation did not settle promptly')), 500)
+    })])
+    stalled.reject(new Error('late stat failure'))
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(titled, false)
+    assert.equal(reported, false)
+  } finally {
+    clearTimeout(timer)
+    stalled.resolve({ isFile: () => true })
+    await selection.catch(() => {})
+  }
+})
+
+test('picker tolerates a real file stat failure and reports it', async () => {
+  const failure = new Error('stat failed')
+  const errors = []
+  const pick = workspacePick(async () => '/fixture/a.code-workspace',
+    { async openPicked() { return '/fixture' } },
+    async () => assert.fail('must not title without a file'), error => errors.push(error),
+    async () => { throw failure })
+  assert.equal(await pick(new AbortController().signal), '/fixture')
+  assert.deepEqual(errors, [failure])
+})
