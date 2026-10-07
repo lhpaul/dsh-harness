@@ -81,7 +81,15 @@ export function apply(ctx, config) {
     result.skills = { scope: await skillNames(config.skills.scope), repo: await skillNames(config.skills.repo) }
     const capability = ctx.directoryPicker.capability()
     const rootsOf = (session) => ctx.sandboxPolicy.resolve({ session, mode: 'workspace-write' }).workspaceRoots ?? []
-    const opened = await ctx.sandboxPolicy.openPicked(config.selection.file)
+    let opened
+    let browseListed = false
+    if (capability.kind === 'browse') {
+      const listing = await ctx.typertGateway.invoke({ namespace: 'directoryPicker', method: 'list', args: { path: config.selection.scope } })
+      browseListed = listing.entries.some((entry) => entry.path === config.selection.file)
+      const preview = await ctx.typertGateway.invoke({ namespace: 'directoryPicker', method: 'list', args: { path: config.selection.file } })
+      if (preview.entries.length !== 0) throw new Error('workspace file is not a leaf')
+      opened = (await ctx.typertGateway.invoke({ namespace: 'workspace', method: 'create', args: { request: { path: config.selection.file } } })).workspace.path
+    } else opened = await ctx.sandboxPolicy.openPicked(config.selection.file)
     await titleWorkspace(ctx.workspaceRegistry, opened, config.selection.file)
     const createdTitle = (await ctx.workspaceRegistry.resolveByPath(opened))?.title
     await (await ctx.workspaceRegistry.resolveByPath(opened)).setTitle('docs')
@@ -91,7 +99,7 @@ export function apply(ctx, config) {
     const fresh = await ctx.agents.create({ sessionId: randomUUID(), meta: { cwd: opened } })
     result.selection = {
       pickerKind: capability.kind,
-      pickerOverridden: String(capability.pick).includes('openPicked'),
+      pickerOverridden: capability.kind === 'browse' ? browseListed : String(capability.pick).includes('openPicked'),
       opened,
       fresh: rootsOf(fresh.agent.session),
       earlier: rootsOf(blum.session),
@@ -170,7 +178,7 @@ try {
   if (!filesOk) failures += 1
   console.log(`${filesOk ? 'PASS' : 'FAIL'}  web file tree    provider=${files.provider} anchored=${files.anchored} extra-root=${JSON.stringify(files.extraRoot)} outside=${files.outside} roots-listing=${JSON.stringify(files.rootsListing)} client-bundles=${JSON.stringify(files.clientBundles)}${loaderErrors.length ? ` errors=${JSON.stringify(loaderErrors)}` : ''}`)
   const sel = result.selection
-  const selectionOk = sel.pickerKind === 'native'
+  const selectionOk = ['native', 'browse'].includes(sel.pickerKind)
     && sel.pickerOverridden === true
     && sel.opened === p.blumRepo
     && sel.fresh.includes(p.shared) && !sel.fresh.includes(p.assetsBlum)
