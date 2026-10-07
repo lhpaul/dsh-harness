@@ -51,3 +51,55 @@ test('browse create resolves, titles and reuses workspace, rejects invalid files
   assert.equal(capability.list, list)
   assert.equal(controller.create, create)
 })
+
+function deferred() {
+  let resolve, reject
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no })
+  return { promise, resolve, reject }
+}
+
+for (const step of ['open', 'read']) {
+  test(`browse aborts a stalled ${step} promptly and closes the abandoned handle`, async () => {
+    const [base, cleanup] = tempHomeDir()
+    const started = deferred()
+    const stalled = deferred()
+    const closing = deferred()
+    const closed = deferred()
+    let closeCalls = 0
+    const level = {
+      read() { started.resolve(); return stalled.promise },
+      close() { closeCalls++; closed.resolve(); return closing.promise },
+    }
+    const upstream = async () => ({ path: base, crumbs: [], entries: [], truncated: false })
+    const open = () => {
+      if (step === 'open') { started.resolve(); return stalled.promise }
+      return Promise.resolve(level)
+    }
+    const controller = new AbortController()
+    const reason = new Error('cancelled stalled scan')
+    const listing = workspaceBrowseList(upstream, 1000, open)(base, controller.signal)
+    let timer
+    try {
+      await started.promise
+      // The filesystem operation and close remain pending until after rejection.
+      const rejected = assert.rejects(listing, error => error === reason)
+      controller.abort(reason)
+      await Promise.race([rejected, new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('abort did not settle promptly')), 500)
+      })])
+      if (step === 'open') stalled.resolve(level)
+      await closed.promise
+      assert.equal(closeCalls, 1)
+      // Late read/close errors must be consumed rather than become unhandled.
+      if (step === 'read') stalled.reject(new Error('late read failure'))
+      closing.reject(new Error('late close failure'))
+      await new Promise(resolve => setImmediate(resolve))
+    } finally {
+      clearTimeout(timer)
+      stalled.resolve(step === 'open' ? level : null)
+      closing.resolve()
+      await listing.catch(() => {})
+      cleanup()
+    }
+  })
+}

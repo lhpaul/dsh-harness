@@ -104,16 +104,39 @@ export function workspacePick(choose, policy, onWorkspaceFile = async () => {}, 
   }
 }
 
+/** Race filesystem steps against cancellation, as in the upstream picker.
+ * Attach settlement handlers even after abort so late failures are consumed.
+ */
+function raceAbort(operation, signal) {
+  if (signal === undefined) return operation
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(signal.reason)
+    if (signal.aborted) {
+      operation.catch(() => {})
+      onAbort()
+      return
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    operation.then((value) => {
+      signal.removeEventListener('abort', onAbort)
+      resolve(value)
+    }, (error) => {
+      signal.removeEventListener('abort', onAbort)
+      reject(error)
+    })
+  })
+}
+
 /** Extend the bounded upstream listing with workspace-file leaves. Listing a
  * leaf returns an empty preview so the upstream browser can select and Open it.
  * No file contents are read until Open; invalid workspace locations are refused
  * by openPicked, exactly as in the native chooser.
  */
-export function workspaceBrowseList(upstream, maxEntries = 1000) {
+export function workspaceBrowseList(upstream, maxEntries = 1000, openDirectory = opendir) {
   return async (path, signal) => {
     signal?.throwIfAborted()
     if (path !== undefined && isAbsolute(path) && path.endsWith(WORKSPACE_SUFFIX)
-      && (await stat(path)).isFile()) {
+      && (await raceAbort(stat(path), signal)).isFile()) {
       const parent = await upstream(dirname(path), signal)
       return { ...parent, path, entries: [], truncated: false,
         crumbs: [...parent.crumbs, { name: basename(path), path, hidden: basename(path).startsWith('.') }] }
@@ -121,16 +144,29 @@ export function workspaceBrowseList(upstream, maxEntries = 1000) {
     const listing = await upstream(path, signal)
     const entries = [...listing.entries]
     let truncated = listing.truncated
-    const level = await opendir(listing.path)
-    // for-await closes the handle on completion, errors and cancellation.
-    for await (const entry of level) {
-      signal?.throwIfAborted()
-      if (!entry.name.endsWith(WORKSPACE_SUFFIX)) continue
-      const file = join(listing.path, entry.name)
-      if (!entry.isFile()) continue
-      entries.push({ name: entry.name, path: file, hidden: entry.name.startsWith('.') })
-      entries.sort((a, b) => a.name.localeCompare(b.name))
-      if (entries.length > maxEntries) { entries.pop(); truncated = true }
+    signal?.throwIfAborted()
+    const opening = openDirectory(listing.path)
+    const level = await raceAbort(opening, signal).catch((error) => {
+      // A cancelled open may still return a handle; close it when it arrives.
+      opening.then((dir) => dir.close().catch(() => {}), () => {})
+      throw error
+    })
+    try {
+      for (;;) {
+        const entry = await raceAbort(level.read(), signal)
+        if (entry === null) break
+        if (!entry.name.endsWith(WORKSPACE_SUFFIX)) continue
+        const file = join(listing.path, entry.name)
+        if (!entry.isFile()) continue
+        entries.push({ name: entry.name, path: file, hidden: entry.name.startsWith('.') })
+        entries.sort((a, b) => a.name.localeCompare(b.name))
+        if (entries.length > maxEntries) { entries.pop(); truncated = true }
+      }
+    } finally {
+      const closing = level.close()
+      // Node queues close behind pending reads; cancellation must not wait.
+      if (signal?.aborted) closing.catch(() => {})
+      else await closing
     }
     return { ...listing, entries, truncated }
   }
