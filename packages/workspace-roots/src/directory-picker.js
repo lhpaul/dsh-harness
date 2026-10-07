@@ -8,8 +8,8 @@
  * `ctx.sandboxPolicy.openPicked()`: a workspace file becomes its scope's
  * active file and its first folder inside the scope (else the scope directory)
  * is returned, so DSH still registers a directory as the workspace; that
- * Workspace is titled after the workspace file (`titleWorkspace`). The browse interaction and other platforms keep
- * the upstream chooser.
+ * Workspace is titled after the workspace file (`titleWorkspace`). The browse interaction lists workspace files as empty preview leaves and
+ * resolves them when the controller creates the workspace.
  *
  * The capability object is stable for the service lifetime (the seam's
  * contract), so the override lives as long as this plugin and that object;
@@ -20,12 +20,14 @@
  */
 
 import { execFile } from 'node:child_process'
-import { basename } from 'node:path'
+import { basename, dirname, join, isAbsolute } from 'node:path'
+import { opendir, stat } from 'node:fs/promises'
+import { symbols } from '@deepseek-ai/cordis'
 import { WORKSPACE_SUFFIX } from './roots.js'
 
 export const name = 'dsh-lh-workspace-roots/directory-picker'
 
-export const inject = ['directoryPicker', 'sandboxPolicy', 'workspaceRegistry']
+export const inject = ['directoryPicker', 'sandboxPolicy', 'workspaceRegistry', 'workspaceController']
 
 /** JXA run by `osascript -l JavaScript`; prints the chosen path, or nothing on cancel. */
 const OPEN_PANEL_SCRIPT = `
@@ -102,12 +104,72 @@ export function workspacePick(choose, policy, onWorkspaceFile = async () => {}, 
   }
 }
 
+/** Extend the bounded upstream listing with workspace-file leaves. Listing a
+ * leaf returns an empty preview so the upstream browser can select and Open it.
+ * No file contents are read until Open; invalid workspace locations are refused
+ * by openPicked, exactly as in the native chooser.
+ */
+export function workspaceBrowseList(upstream, maxEntries = 1000) {
+  return async (path, signal) => {
+    signal?.throwIfAborted()
+    if (path !== undefined && isAbsolute(path) && path.endsWith(WORKSPACE_SUFFIX)
+      && (await stat(path)).isFile()) {
+      const parent = await upstream(dirname(path), signal)
+      return { ...parent, path, entries: [], truncated: false,
+        crumbs: [...parent.crumbs, { name: basename(path), path, hidden: basename(path).startsWith('.') }] }
+    }
+    const listing = await upstream(path, signal)
+    const entries = [...listing.entries]
+    let truncated = listing.truncated
+    const level = await opendir(listing.path)
+    // for-await closes the handle on completion, errors and cancellation.
+    for await (const entry of level) {
+      signal?.throwIfAborted()
+      if (!entry.name.endsWith(WORKSPACE_SUFFIX)) continue
+      const file = join(listing.path, entry.name)
+      if (!entry.isFile()) continue
+      entries.push({ name: entry.name, path: file, hidden: entry.name.startsWith('.') })
+      entries.sort((a, b) => a.name.localeCompare(b.name))
+      if (entries.length > maxEntries) { entries.pop(); truncated = true }
+    }
+    return { ...listing, entries, truncated }
+  }
+}
+
+/** Install browse seams on live objects; disposal restores their descriptors. */
+export function installWorkspaceBrowse(capability, controller, policy, registry, onError, maxEntries) {
+  const list = capability.list
+  const target = controller[symbols.original] ?? controller
+  const descriptor = Object.getOwnPropertyDescriptor(target, 'create')
+  const create = target.create
+  capability.list = workspaceBrowseList(list, maxEntries)
+  Object.defineProperty(target, 'create', {
+    configurable: true, writable: true,
+    async value(request) {
+      const path = await workspacePick(async () => request.path, policy,
+        (directory, file) => titleWorkspace(registry, directory, file), onError)()
+      return create.call(this, { ...request, path })
+    },
+  })
+  return () => {
+    capability.list = list
+    if (descriptor) Object.defineProperty(target, 'create', descriptor)
+    else delete target.create
+  }
+}
+
 /**
  * @param {import('@deepseek-ai/cordis').Context} ctx - plugin context.
  */
 export function apply(ctx) {
   const logger = ctx.logger('workspace-roots')
   const capability = ctx.directoryPicker.capability()
+  if (capability.kind === 'browse') {
+    ctx.effect(() => installWorkspaceBrowse(capability, ctx.workspaceController, ctx.sandboxPolicy,
+      ctx.workspaceRegistry, (error) => logger.warn(String(error)),
+      ctx.directoryPicker.config?.maxEntries), 'dsh-lh-workspace-roots: browse workspace files')
+    return
+  }
   if (process.platform !== 'darwin' || capability.kind !== 'native') {
     logger.info(`Add workspace keeps the upstream ${capability.kind} chooser on ${process.platform}; workspace files open only through the macOS native chooser`)
     return

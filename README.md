@@ -32,7 +32,7 @@ Strategy, decisions and verified traps live in the vault note `~/Git/Cerebro/LH/
 
 ### Opening a workspace file
 
-A scope often has several workspace files (`DevStack - DSH`, `DevStack - Helm`, …), and the union of all of them is broader than any one task. On macOS, the Web **Add workspace** button opens one panel that accepts a folder or a `*.code-workspace` file:
+A scope often has several workspace files (`DevStack - DSH`, `DevStack - Helm`, …), and the union of all of them is broader than any one task. The Web **Add workspace** button accepts a folder or a `*.code-workspace` file, through the macOS native panel or the browser picker (including remote/SSH launches):
 
 - **A workspace file directly in a scope folder** becomes that scope's *active file*, and its first folder is registered as the DSH workspace (DSH workspaces are directories, one per path), so sessions start there and the session header's "open in" menu opens that repo. When the first folder is not an existing directory inside the scope (or is the scope itself), the scope folder is registered instead. Either way the Workspace is titled after the file (`Radar Insights`, not `seia`): the picker creates the registration in `ctx.workspaceRegistry` with that title, or retitles an existing one, before returning the directory, and the controller's create route then reuses it. Titles are not unique, so an older Workspace of the scope folder with the same name stays until you remove it; renaming in the sidebar still works, until the file is opened again.
 - **The scope folder itself** clears the active file: back to the union.
@@ -42,7 +42,7 @@ A session whose cwd lies in one of its workspace file's in-scope folders also ge
 
 Each session pins its scope's active file (or the union) the first time its roots are resolved, and keeps it: switching the active file later affects only new sessions, so a running session never gains roots silently. Forks inherit the parent's pin; sessions that existed before this feature pin whatever is active the first time they are resolved after it. A pinned file is re-read on every call; if it is deleted, the session gets no workspace-file roots and a warning is logged.
 
-Active files and pins live in the `dsh_lh_workspace_roots` storage domain (`ctx.storageDomain`), not in the session log; the resulting roots reach the model through the `sandbox:policy` context. The panel replaces `pick` on the live native capability of upstream `ctx.directoryPicker` (directory-picker-auto stays), and disposal restores it. The browse interaction (remote or SSH launches) and other platforms keep the upstream folder chooser.
+Active files and pins live in the `dsh_lh_workspace_roots` storage domain (`ctx.storageDomain`), not in the session log; the resulting roots reach the model through the `sandbox:policy` context. The panel replaces `pick` on the live native capability of upstream `ctx.directoryPicker` (directory-picker-auto stays), and disposal restores it. The browse capability adds `.code-workspace` files to the name-sorted, bounded directory listing. Files appear as selectable leaves with an empty preview column; choose **Open** to resolve and title the workspace through the same policy as the native panel. The upstream browser currently uses its folder icon for these leaves. The plugin also wraps the live controller’s `create` method for browse selections and restores both overrides on disposal. Other native platforms keep the upstream folder chooser.
 
 ### Repo skills in workspace-file sessions
 
